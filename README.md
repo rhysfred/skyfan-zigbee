@@ -46,8 +46,11 @@ Zigbee Coordinator
 ## Project Structure
 
 - **`skyfan-zigbee.ino`**: Main Arduino sketch with Zigbee endpoints and callbacks
-- **`TuyaProtocol.h/.cpp`**: Tuya serial protocol implementation
+- **`TuyaProtocol.h`**: Tuya serial protocol header with constants and class definitions
+- **`TuyaProtocol.cpp`**: Tuya serial protocol implementation
 - **`SkyfanZigbee.h`**: Extended Zigbee classes and custom attributes
+- **`README.md`**: Project documentation and setup instructions
+- **`LICENCE.md`**: GNU General Public License v3.0 terms and conditions
 
 ## Protocol Details
 
