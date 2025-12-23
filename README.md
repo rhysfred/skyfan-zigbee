@@ -23,7 +23,7 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 - **Protocol**: Zigbee 3.0 Router mode
 - **Endpoints**: Separate endpoints for fan (EP1) and light (EP2)
 - **Bidirectional**: Status updates flow both directions (Zigbee ↔ MCU)
-- **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters
+- **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters. It does use a manufacturer extension for Zigbee to support fan direction though (standard Zigbee fan profile is pretty limited).
 
 ## Hardware Requirements
 
@@ -166,7 +166,9 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 3. **Partial Functionality**: Check data point mappings in TuyaProtocol.h
 
 ### Debug Mode
-Uncomment debugSerial statements in code for debugging:
+All the debug statements are currently commented out because the expressif ESP32 board library doesn't have Software Serial included, and installing it from here (https://github.com/plerup/espsoftwareserial) as the seeed wiki suggests is not as simple as it should be. Espsoftwareserial is dependent upon other libraries not included with the expressif board libraries, and I haven't bothered to track them down yet.
+
+To see debugging once espsoftwareserial is sorted, uncomment debugSerial statements in code for debugging:
 ```cpp
 // Uncomment SoftwareSerial includes and setup
 // debugSerial.println("Debug message here");
