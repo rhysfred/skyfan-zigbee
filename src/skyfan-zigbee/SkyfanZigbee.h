@@ -51,7 +51,7 @@ public:
   }
   
   // Map Tuya speed to appropriate Zigbee fan mode
-  bool setFanSpeedMode(uint8_t speed) {
+  bool setFanSpeed(uint8_t speed) {
     // Validate input range
     if (!isValidTuyaFanSpeed(speed)) {
       return false;

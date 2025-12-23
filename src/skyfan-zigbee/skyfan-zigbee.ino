@@ -114,7 +114,7 @@ void handleFanSwitchStatus(uint32_t value) {
 void handleFanSpeedStatus(uint32_t value) {
   uint8_t speed = static_cast<uint8_t>(value);
   if (isValidTuyaFanSpeed(speed)) {
-    if (!zbFanControl.setFanSpeedMode(speed)) {
+    if (!zbFanControl.setFanSpeed(speed)) {
       // debugSerial.printf("Failed to update Zigbee fan speed status: %d\n", speed);
     }
     // debugSerial.printf("Fan speed status: %d\n", speed);

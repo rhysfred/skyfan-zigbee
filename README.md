@@ -136,7 +136,7 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
   // Adds public setter methods for bidirectional status updates
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
-  bool setFanSpeedMode(uint8_t speed);
+  bool setFanSpeed(uint8_t speed);
 };
 ```
 
