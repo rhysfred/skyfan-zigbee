@@ -1,6 +1,6 @@
 # Skyfan Zigbee Controller
 
-A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting, using ESP32 and Tuya MCU communication. Note that this project is not associated with Ventair.
+A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting, using ESP32 and Tuya MCU communication. Note that Ventair is not associated with this project.
 
 ## Overview
 
