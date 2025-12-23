@@ -73,8 +73,8 @@ Zigbee Coordinator
 ## Installation
 
 1. **Configure Arduino IDE**:
-   - Install ESP32 board package (v3.3.5 or later)
-   - Select "ESP32C6 Dev Module" board
+   - Install ESP32 board package by Expressif (v3.3.5 or later)
+   - Select your ESP32C6 board e.g. "XAIO_ESP32C6" or "Adafruit Feather ESP32-C6". If using a board other than the XAIO one, double-check the pinouts in this sketch
    - Set "Zigbee Mode" to "Zigbee ZCZR (coordinator/router)"
 
 2. **Upload Firmware**:
