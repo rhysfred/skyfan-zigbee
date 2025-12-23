@@ -110,9 +110,9 @@ enum class FanDirection : uint8_t {
 // Protocol states for better state machine readability
 // LED status states for visual indication
 enum class LedStatus : uint8_t {
-  FACTORY_NEW = 0,    // Solid on - device never joined network
-  INITIALISING = 1,   // Rapid flash - device starting up
-  CONNECTED = 2       // Slow flash - device connected to network
+  FACTORY_NEW = 0,    // Rapid flash - device never joined network
+  INITIALISING = 1,   // Solid on - device starting up
+  CONNECTED = 2       // Off - device connected to network
 };
 
 enum class TuyaProtocolState : uint8_t {
@@ -246,14 +246,6 @@ public:
     
     switch (currentStatus) {
       case LedStatus::FACTORY_NEW:
-        // Solid on
-        if (!ledState) {
-          ledState = true;
-          digitalWrite(pin, HIGH);
-        }
-        break;
-        
-      case LedStatus::INITIALISING:
         // Rapid flash - 5 times per second (100ms on, 100ms off)
         if (now - lastFlashStart >= LED_RAPID_FLASH_ON_TIME_MS + LED_RAPID_FLASH_OFF_TIME_MS) {
           lastFlashStart = now;
@@ -265,13 +257,17 @@ public:
         }
         break;
         
-      case LedStatus::CONNECTED:
-        // Flash once every 5 seconds for 200ms
-        if (now - lastFlashStart >= LED_FLASH_INTERVAL_MS) {
-          lastFlashStart = now;
+      case LedStatus::INITIALISING:
+        // Solid on
+        if (!ledState) {
           ledState = true;
           digitalWrite(pin, HIGH);
-        } else if (ledState && (now - lastFlashStart >= LED_FLASH_ON_TIME_MS)) {
+        }
+        break;
+        
+      case LedStatus::CONNECTED:
+        // Off
+        if (ledState) {
           ledState = false;
           digitalWrite(pin, LOW);
         }
@@ -284,10 +280,13 @@ public:
       currentStatus = status;
       lastFlashStart = millis(); // Reset timing when status changes
       
-      // Immediate state change for factory new
-      if (status == LedStatus::FACTORY_NEW) {
+      // Immediate state change for specific states
+      if (status == LedStatus::INITIALISING) {
         ledState = true;
         digitalWrite(pin, HIGH);
+      } else if (status == LedStatus::CONNECTED) {
+        ledState = false;
+        digitalWrite(pin, LOW);
       }
     }
   }

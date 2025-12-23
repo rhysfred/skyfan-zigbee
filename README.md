@@ -126,6 +126,13 @@ skyfan-zigbee/
 - MCU status changes are reported back to Zigbee coordinator
 - Both fan and light controls support bidirectional updates
 
+### LED Status Indication
+The built-in LED provides visual feedback about the device's network status:
+
+- **Rapid Flash** (5Hz): Factory new - device has never joined a network and needs pairing
+- **Solid On**: Initialising - device is starting up or attempting to connect to network
+- **Off**: Connected - device is successfully connected to Zigbee coordinator
+
 ## Technical Implementation
 
 ### Extended Zigbee Classes
