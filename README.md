@@ -188,3 +188,4 @@ Copyright (c) 2025
 - [ESP32 Zigbee SDK Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/zigbee/index.html)
 - [Tuya MCU Serial Protocol](https://developer.tuya.com/en/docs/iot/tuya-cloud-universal-serial-port-access-protocol?id=K9hhi0xxtn9cb)
 - [Zigbee Cluster Library Specification](https://zigbeealliance.org/solution/zigbee/)
+- [Skyfan DC Project](https://github.com/jeggleston1981/skyfandc) - Related DC motor version implementation
