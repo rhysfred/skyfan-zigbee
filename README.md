@@ -33,14 +33,27 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 
 ## Architecture
 
-```
-Zigbee Coordinator
-       ↕ (Zigbee 3.0)
-  ESP32 Controller
-       ↕ (Tuya Serial Protocol)
-   Fan MCU Controller
-       ↕ (Internal Control)
-  Fan Motor + Lighting
+```mermaid
+graph TD
+    ZC[Zigbee Coordinator]
+    ESP[ESP32 Controller<br/>Zigbee Router]
+    MCU[Fan MCU Controller<br/>Tuya Protocol]
+    FAN[Fan Motor]
+    LIGHT[LED Lighting]
+    
+    ZC <-->|Zigbee 3.0<br/>Wireless| ESP
+    ESP <-->|Tuya Serial Protocol<br/>UART 115200 baud| MCU
+    MCU -->|PWM Control| FAN
+    MCU -->|PWM Control| LIGHT
+    
+    ESP -.->|Fan Control<br/>Endpoint 1| ZC
+    ESP -.->|Light Control<br/>Endpoint 2| ZC
+    
+    style ZC fill:#e1f5fe
+    style ESP fill:#f3e5f5
+    style MCU fill:#fff3e0
+    style FAN fill:#e8f5e8
+    style LIGHT fill:#fff8e1
 ```
 
 ## Project Structure

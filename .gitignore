@@ -1,0 +1,87 @@
+# Arduino IDE compilation files
+build/
+*.hex
+*.bin
+*.elf
+*.map
+
+# Arduino IDE temporary files
+*.tmp
+*~
+*.swp
+*.swo
+
+# Platform.io files (if used)
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code / Arduino IDE extensions
+.vscode/
+*.code-workspace
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux files
+*~
+.nfs*
+
+# Temporary files
+*.log
+*.bak
+*.orig
+
+# ESP32 specific build artifacts
+bootloader.bin
+partitions.bin
+firmware.bin
+
+# Fusion 360 temporary and backup files
+*.f3d.bak*
+*.f3z.bak*
+~$*.f3d
+~$*.f3z
+*.autosave
+*.recovery
+
+# CAD export temporary files
+*.step.tmp
+*.iges.tmp
+
+# Electronics design temporary files
+*.sch.bak
+*.brd.bak
+*.pro.bak
+
+# Compiled libraries
+*.a
+*.so
+*.dylib
+
+# Debug files
+*.dSYM/
+
+# IDE files
+*.sublime-*
+*.idea/
+*.iml
+
+# Node modules (if any web tools are used)
+node_modules/
+
+# Python cache (if any Python tools are used)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Claude Code directory
+.claude/
