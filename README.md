@@ -23,7 +23,7 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 - **Protocol**: Zigbee 3.0 Router mode
 - **Endpoints**: Separate endpoints for fan (EP1) and light (EP2)
 - **Bidirectional**: Status updates flow both directions (Zigbee ↔ MCU)
-- **Standards Compliant**: Uses standard Zigbee Fan Control and Color Dimmable Light clusters
+- **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters
 
 ## Hardware Requirements
 
@@ -45,12 +45,21 @@ Zigbee Coordinator
 
 ## Project Structure
 
-- **`skyfan-zigbee.ino`**: Main Arduino sketch with Zigbee endpoints and callbacks
-- **`TuyaProtocol.h`**: Tuya serial protocol header with constants and class definitions
-- **`TuyaProtocol.cpp`**: Tuya serial protocol implementation
-- **`SkyfanZigbee.h`**: Extended Zigbee classes and custom attributes
-- **`README.md`**: Project documentation and setup instructions
-- **`LICENCE.md`**: GNU General Public License v3.0 terms and conditions
+```
+skyfan-zigbee/
+├── src/
+│   └── skyfan-zigbee/
+│       ├── skyfan-zigbee.ino      # Main Arduino sketch with Zigbee endpoints and callbacks
+│       ├── SkyfanConfig.h         # Centralized configuration constants and utility functions
+│       ├── TuyaProtocol.h         # Tuya serial protocol header with constants and class definitions
+│       ├── TuyaProtocol.cpp       # Tuya serial protocol implementation
+│       └── SkyfanZigbee.h         # Extended Zigbee classes and custom attributes
+├── electronics/
+│   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
+│   └── README.md                  # Electronics design documentation
+├── README.md                      # Project documentation and setup instructions
+└── LICENCE.md                     # GNU General Public License v3.0 terms and conditions
+```
 
 ## Protocol Details
 
@@ -79,7 +88,7 @@ Zigbee Coordinator
 
 2. **Upload Firmware**:
    ```bash
-   # Open skyfan-zigbee.ino in Arduino IDE
+   # Open src/skyfan-zigbee/skyfan-zigbee.ino in Arduino IDE
    # Verify and upload to ESP32-C6
    ```
 
@@ -126,7 +135,7 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 ## Configuration
 
 ### Zigbee Settings
-- **Device ID**: Heating/Cooling Unit with Fan Control and Color Dimmable Light
+- **Device ID**: Heating/Cooling Unit with Fan Control and Colour Dimmable Light
 - **Manufacturer**: "Ventair"
 - **Model**: "Skyfan" / "Skyfan Light"
 - **Profile**: Home Automation (HA 1.2)
@@ -144,9 +153,10 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 3. **Partial Functionality**: Check data point mappings in TuyaProtocol.h
 
 ### Debug Mode
-Uncomment Serial.print statements in code for debugging:
+Uncomment debugSerial statements in code for debugging:
 ```cpp
-// Serial.println("Debug message here");
+// Uncomment SoftwareSerial includes and setup
+// debugSerial.println("Debug message here");
 ```
 
 ## License
