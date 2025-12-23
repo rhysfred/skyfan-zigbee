@@ -46,6 +46,13 @@
 #define ZIGBEE_CONNECTION_POLL_MS      100    // 100ms
 #define FACTORY_RESET_DELAY_MS         1000   // 1 second
 
+// === LED Status Indication Timing ===
+#define LED_STATUS_UPDATE_INTERVAL_MS  100    // Check LED status every 100ms
+#define LED_FLASH_ON_TIME_MS           200    // Flash duration when connected
+#define LED_FLASH_INTERVAL_MS          5000   // Flash every 5 seconds when connected
+#define LED_RAPID_FLASH_ON_TIME_MS     100    // Rapid flash on time (initialising)
+#define LED_RAPID_FLASH_OFF_TIME_MS    100    // Rapid flash off time (initialising)
+
 // === Colour Temperature Configuration ===
 // Kelvin values for each temperature setting
 #define COLOUR_TEMP_WARM_KELVIN         3000
@@ -101,6 +108,13 @@ enum class FanDirection : uint8_t {
 };
 
 // Protocol states for better state machine readability
+// LED status states for visual indication
+enum class LedStatus : uint8_t {
+  FACTORY_NEW = 0,    // Solid on - device never joined network
+  INITIALISING = 1,   // Rapid flash - device starting up
+  CONNECTED = 2       // Slow flash - device connected to network
+};
+
 enum class TuyaProtocolState : uint8_t {
   WAIT_HEADER_1 = 0,
   WAIT_HEADER_2 = 1,
@@ -204,6 +218,84 @@ inline uint8_t tuyaBrightnessToZigbee(uint8_t tuyaBrightness) {
   uint8_t clamped = clamp(tuyaBrightness, static_cast<uint8_t>(TUYA_BRIGHTNESS_MIN), static_cast<uint8_t>(TUYA_BRIGHTNESS_MAX));
   return map(clamped, TUYA_BRIGHTNESS_MIN, TUYA_BRIGHTNESS_MAX, ZIGBEE_BRIGHTNESS_MIN, ZIGBEE_BRIGHTNESS_MAX);
 }
+
+// === LED Status Indicator Class ===
+
+class LedStatusIndicator {
+private:
+  uint8_t pin;
+  LedStatus currentStatus;
+  bool ledState;
+  unsigned long lastUpdate;
+  unsigned long lastFlashStart;
+  
+public:
+  LedStatusIndicator(uint8_t ledPin) 
+    : pin(ledPin), currentStatus(LedStatus::INITIALISING), ledState(false), lastUpdate(0), lastFlashStart(0) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+  }
+  
+  void update() {
+    unsigned long now = millis();
+    
+    if (now - lastUpdate < LED_STATUS_UPDATE_INTERVAL_MS) {
+      return; // Not time to update yet
+    }
+    lastUpdate = now;
+    
+    switch (currentStatus) {
+      case LedStatus::FACTORY_NEW:
+        // Solid on
+        if (!ledState) {
+          ledState = true;
+          digitalWrite(pin, HIGH);
+        }
+        break;
+        
+      case LedStatus::INITIALISING:
+        // Rapid flash - 5 times per second (100ms on, 100ms off)
+        if (now - lastFlashStart >= LED_RAPID_FLASH_ON_TIME_MS + LED_RAPID_FLASH_OFF_TIME_MS) {
+          lastFlashStart = now;
+          ledState = true;
+          digitalWrite(pin, HIGH);
+        } else if (ledState && (now - lastFlashStart >= LED_RAPID_FLASH_ON_TIME_MS)) {
+          ledState = false;
+          digitalWrite(pin, LOW);
+        }
+        break;
+        
+      case LedStatus::CONNECTED:
+        // Flash once every 5 seconds for 200ms
+        if (now - lastFlashStart >= LED_FLASH_INTERVAL_MS) {
+          lastFlashStart = now;
+          ledState = true;
+          digitalWrite(pin, HIGH);
+        } else if (ledState && (now - lastFlashStart >= LED_FLASH_ON_TIME_MS)) {
+          ledState = false;
+          digitalWrite(pin, LOW);
+        }
+        break;
+    }
+  }
+  
+  void setStatus(LedStatus status) {
+    if (currentStatus != status) {
+      currentStatus = status;
+      lastFlashStart = millis(); // Reset timing when status changes
+      
+      // Immediate state change for factory new
+      if (status == LedStatus::FACTORY_NEW) {
+        ledState = true;
+        digitalWrite(pin, HIGH);
+      }
+    }
+  }
+  
+  LedStatus getStatus() const {
+    return currentStatus;
+  }
+};
 
 // === Non-blocking Button Debounce Class ===
 

@@ -35,7 +35,5 @@ The design files are created using **Autodesk Fusion 360 Electronics**.
 Processed manufacturing files are stored in the `gerber/` subdirectory and include:
 - Gerber files for each PCB layer
 - Excellon drill files
-- Pick and place files
 - Bill of materials (BOM)
-- Assembly drawings
 - Silkscreen overlay files

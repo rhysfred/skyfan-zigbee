@@ -27,12 +27,13 @@
 // #include <SoftwareSerial.h>
 
 #ifdef RGB_BUILTIN
-uint8_t led = RGB_BUILTIN;  // To demonstrate the current fan control mode
+uint8_t led = RGB_BUILTIN;
 #else
 uint8_t led = 2;
 #endif
 
 DebouncedButton factoryResetButton(FACTORY_RESET_BUTTON_PIN);
+LedStatusIndicator statusLed(led);
 
 SkyfanZigbeeFanControl zbFanControl = SkyfanZigbeeFanControl(ZIGBEE_FAN_CONTROL_ENDPOINT);
 ZigbeeColorDimmableLight zbLight = ZigbeeColorDimmableLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
@@ -285,6 +286,10 @@ void loop() {
   // Update button state (non-blocking)
   factoryResetButton.update();
   
+  // Update LED status based on Zigbee state
+  updateLedStatus();
+  statusLed.update();
+  
   // Check for factory reset long press
   if (factoryResetButton.wasLongPressed()) {
     // debugSerial.println("Resetting Zigbee to factory and rebooting in 1s.");
@@ -293,4 +298,15 @@ void loop() {
   }
   
   delay(MAIN_LOOP_DELAY_MS);
+}
+
+// Update LED status based on current Zigbee network state
+void updateLedStatus() {
+  if (esp_zb_bdb_is_factory_new()) {
+    statusLed.setStatus(LedStatus::FACTORY_NEW);
+  } else if (!Zigbee.connected()) {
+    statusLed.setStatus(LedStatus::INITIALISING);
+  } else {
+    statusLed.setStatus(LedStatus::CONNECTED);
+  }
 }

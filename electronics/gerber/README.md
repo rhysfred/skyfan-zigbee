@@ -9,13 +9,10 @@ This directory contains the processed manufacturing files exported from Fusion 3
 - **Excellon drill files** (.drl) - Hole drilling information
 - **NC drill files** (.txt) - Numerical control drilling data
 
-### Assembly Files
-- **Pick and place files** (.csv/.txt) - Component placement coordinates
+### Manufacturing Files
 - **Bill of materials** (BOM.csv) - Complete parts list with specifications
-- **Assembly drawings** (.pdf) - Visual assembly reference
 
 ### Documentation
-- **Fabrication drawings** (.pdf) - PCB specifications and notes
 - **Silkscreen files** (.gbr) - Component labels and reference designators
 - **Soldermask files** (.gbr) - Solder mask layer definition
 - **Solderpaste files** (.gbr) - Solder paste stencil information
