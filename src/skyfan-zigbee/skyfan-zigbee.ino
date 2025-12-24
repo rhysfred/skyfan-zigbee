@@ -44,7 +44,7 @@ TuyaProtocol tuya(&tuyaSerial);
 
 // USB Serial (Serial) is used for debug output
 
-/********************* fan control callback function **************************/
+/********************* fan control callback functions **************************/
 void setFan(ZigbeeFanMode mode) {
   switch (mode) {
     case FAN_MODE_OFF:
@@ -77,6 +77,16 @@ void setFan(ZigbeeFanMode mode) {
       Serial.println("Fan mode: ON");
       break;
     default: Serial.printf("Unhandled fan mode: %d\n", mode); break;
+  }
+}
+
+// Fan direction control callback function
+void setFanDirection(uint8_t direction) {
+  if (tuya.setFanDirection(direction)) {
+    Serial.printf("Fan direction set to: %d (%s)\n", direction,
+      (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE");
+  } else {
+    Serial.printf("Failed to set fan direction: %d\n", direction);
   }
 }
 
@@ -142,8 +152,10 @@ void handleFanModeStatus(uint32_t value) {
 void handleFanDirectionStatus(uint32_t value) {
   uint8_t direction = static_cast<uint8_t>(value);
   if (direction <= static_cast<uint8_t>(FanDirection::REVERSE)) {
-    // Note: Direction is not a standard Zigbee attribute
-    // Could be implemented as a custom manufacturer attribute if needed
+    // Update custom manufacturer attribute for fan direction
+    if (!zbFanControl.setFanDirection(direction)) {
+      Serial.printf("Failed to update Zigbee fan direction status: %d\n", direction);
+    }
     Serial.printf("Fan direction status: %d (%s)\n", direction, 
       (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE");
   } else {
@@ -259,6 +271,7 @@ void setup() {
 
   // Set callback functions for fan and light control
   zbFanControl.onFanModeChange(setFan);
+  zbFanControl.onFanDirectionChange(setFanDirection);
   zbLight.onLightChangeTemp(setLight);
 
   //Add endpoints to Zigbee Core
@@ -266,6 +279,9 @@ void setup() {
   Zigbee.addEndpoint(&zbFanControl);
   Serial.println("Adding ZigbeeLight endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbLight);
+
+  // Add custom manufacturer attributes
+  zbFanControl.addCustomAttributes();
 
   // When all EPs are registered, start Zigbee in ROUTER mode
   if (!Zigbee.begin(ZIGBEE_ROUTER)) {
