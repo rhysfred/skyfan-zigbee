@@ -75,6 +75,7 @@ private:
   unsigned long lastHeartbeat;
   bool tuyaConnected;
   void (*deviceStatusCallback)(uint8_t dpid, uint32_t value);
+  HardwareSerial* serial;
   
   // Internal state for response processing
   TuyaProtocolState rxState;
@@ -84,7 +85,7 @@ private:
   uint8_t currentCmd;
 
 public:
-  TuyaProtocol();
+  TuyaProtocol(HardwareSerial* serialInterface);
   
   void begin(uint32_t baudRate = MCU_SERIAL_BAUD_RATE);
   void update(bool zigbeeConnected);

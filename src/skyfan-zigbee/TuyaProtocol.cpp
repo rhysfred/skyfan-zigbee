@@ -17,12 +17,12 @@
 
 #include "TuyaProtocol.h"
 
-TuyaProtocol::TuyaProtocol() 
-  : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), rxState(TuyaProtocolState::WAIT_HEADER_1), rxIndex(0), expectedLen(0), currentCmd(0) {
+TuyaProtocol::TuyaProtocol(HardwareSerial* serialInterface) 
+  : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), serial(serialInterface), rxState(TuyaProtocolState::WAIT_HEADER_1), rxIndex(0), expectedLen(0), currentCmd(0) {
 }
 
 void TuyaProtocol::begin(uint32_t baudRate) {
-  Serial.begin(baudRate);
+  serial->begin(baudRate);
 }
 
 void TuyaProtocol::update(bool zigbeeConnected) {
@@ -33,13 +33,13 @@ void TuyaProtocol::update(bool zigbeeConnected) {
   if (millis() - lastHeartbeatSent > TUYA_HEARTBEAT_INTERVAL_MS) {
     sendHeartbeat();
     lastHeartbeatSent = millis();
-    // debugSerial.println("Heartbeat sent to MCU");
+    // Heartbeat sent to MCU
   }
   
   // Check connection status
   if (tuyaConnected && (millis() - lastHeartbeat > TUYA_CONNECTION_TIMEOUT_MS)) {
     tuyaConnected = false;
-    // debugSerial.println("MCU connection lost!");
+    // MCU connection lost
   }
   
   // Send network status updates when Zigbee connection state changes
@@ -51,7 +51,7 @@ void TuyaProtocol::update(bool zigbeeConnected) {
     sendNetworkStatus(status);
     lastZigbeeState = zigbeeConnected;
     firstRun = false;
-    // debugSerial.printf("Zigbee status change - sent status: %d\n", status);
+    // Zigbee status change - sent status
   }
 }
 
@@ -82,8 +82,8 @@ void TuyaProtocol::sendCommand(uint8_t cmd, uint8_t* data, uint16_t len) {
   uint8_t checksum = calculateChecksum(&packet[2], idx - 2);
   packet[idx++] = checksum;
   
-  Serial.write(packet, idx);
-  Serial.flush();
+  serial->write(packet, idx);
+  serial->flush();
 }
 
 void TuyaProtocol::sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value) {
@@ -119,7 +119,7 @@ bool TuyaProtocol::setFanSwitch(bool on) {
 bool TuyaProtocol::setFanSpeed(uint8_t speed) {
   // Validate fan speed range
   if (!isValidTuyaFanSpeed(speed)) {
-    // debugSerial.printf("Invalid fan speed: %d (valid range: %d-%d)\n", speed, TUYA_FAN_SPEED_MIN, TUYA_FAN_SPEED_MAX);
+    // Invalid fan speed
     return false;
   }
   sendDataPoint(DP_FAN_SPEED, DP_TYPE_VALUE, speed);
@@ -129,7 +129,7 @@ bool TuyaProtocol::setFanSpeed(uint8_t speed) {
 bool TuyaProtocol::setFanMode(uint8_t mode) {
   // Validate fan mode
   if (mode > static_cast<uint8_t>(TuyaFanMode::SLEEP)) {
-    // debugSerial.printf("Invalid fan mode: %d (valid range: 0-%d)\n", mode, static_cast<uint8_t>(TuyaFanMode::SLEEP));
+    // Invalid fan mode
     return false;
   }
   sendDataPoint(DP_FAN_MODE, DP_TYPE_ENUM, mode);
@@ -139,7 +139,7 @@ bool TuyaProtocol::setFanMode(uint8_t mode) {
 bool TuyaProtocol::setFanDirection(uint8_t direction) {
   // Validate fan direction
   if (direction > static_cast<uint8_t>(FanDirection::REVERSE)) {
-    // debugSerial.printf("Invalid fan direction: %d (valid range: 0-%d)\n", direction, static_cast<uint8_t>(FanDirection::REVERSE));
+    // Invalid fan direction
     return false;
   }
   sendDataPoint(DP_FAN_DIRECTION, DP_TYPE_ENUM, direction);
@@ -155,7 +155,7 @@ bool TuyaProtocol::setLightSwitch(bool on) {
 bool TuyaProtocol::setLightBrightness(uint8_t brightness) {
   // Validate brightness range
   if (!isValidTuyaBrightness(brightness)) {
-    // debugSerial.printf("Invalid brightness: %d (valid range: %d-%d)\n", brightness, TUYA_BRIGHTNESS_MIN, TUYA_BRIGHTNESS_MAX);
+    // Invalid brightness
     return false;
   }
   sendDataPoint(DP_LIGHT_DIMMER, DP_TYPE_VALUE, brightness);
@@ -165,7 +165,7 @@ bool TuyaProtocol::setLightBrightness(uint8_t brightness) {
 bool TuyaProtocol::setLightColourTemp(uint8_t colourTemp) {
   // Validate colour temperature
   if (colourTemp > static_cast<uint8_t>(ColourTempLevel::COOL)) {
-    // debugSerial.printf("Invalid colour temperature: %d (valid range: 0-%d)\n", colourTemp, static_cast<uint8_t>(ColourTempLevel::COOL));
+    // Invalid colour temperature
     return false;
   }
   sendDataPoint(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, colourTemp);
@@ -189,23 +189,23 @@ bool TuyaProtocol::waitForResponse(uint8_t expectedCmd, unsigned long timeout) {
   unsigned long startTime = millis();
   
   while (millis() - startTime < timeout) {
-    if (Serial.available() >= 6) {
-      if (Serial.read() == 0x55 && Serial.read() == 0xAA) {
-        uint8_t version = Serial.read();
-        uint8_t cmd = Serial.read();
-        uint16_t len = (Serial.read() << 8) | Serial.read();
+    if (serial->available() >= 6) {
+      if (serial->read() == 0x55 && serial->read() == 0xAA) {
+        uint8_t version = serial->read();
+        uint8_t cmd = serial->read();
+        uint16_t len = (serial->read() << 8) | serial->read();
         
         if (cmd == expectedCmd || expectedCmd == 0xFF) {
           for (uint16_t i = 0; i < len + 1; i++) {
-            if (Serial.available()) {
-              Serial.read();
+            if (serial->available()) {
+              serial->read();
             }
           }
           return true;
         } else {
           for (uint16_t i = 0; i < len + 1; i++) {
-            if (Serial.available()) {
-              Serial.read();
+            if (serial->available()) {
+              serial->read();
             }
           }
         }
@@ -217,8 +217,8 @@ bool TuyaProtocol::waitForResponse(uint8_t expectedCmd, unsigned long timeout) {
 }
 
 void TuyaProtocol::processResponse(bool zigbeeConnected) {
-  while (Serial.available()) {
-    uint8_t byte = Serial.read();
+  while (serial->available()) {
+    uint8_t byte = serial->read();
     
     switch (rxState) {
       case TuyaProtocolState::WAIT_HEADER_1:
@@ -270,7 +270,7 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
           rxState = TuyaProtocolState::WAIT_HEADER_1;
           rxIndex = 0;
           expectedLen = 0;
-          // debugSerial.println("Buffer overflow protection triggered");
+          // Buffer overflow protection triggered
           break;
         }
         
@@ -291,7 +291,7 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
               
               // Validate data length doesn't exceed remaining buffer
               if (dataIndex + len > rxIndex || len > 8) {  // Sanity check on length
-                // debugSerial.printf("Invalid data point length: %d at index %d\n", len, dataIndex);
+                // Invalid data point length
                 break;
               }
               
@@ -310,13 +310,13 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
               } else {
                 // Skip unknown or invalid data point
                 dataIndex += len;
-                // debugSerial.printf("Skipping unknown data point - DPID: %d, Type: %d, Len: %d\n", dpid, type, len);
+                // Skipping unknown data point
               }
               
               // Call status callback if we have a valid data point and callback is registered
               if (validDataPoint && deviceStatusCallback) {
                 deviceStatusCallback(dpid, value);
-                // debugSerial.printf("Status update - DPID: %d, Value: %d\n", dpid, value);
+                // Status update received
               }
             }
           } else if (currentCmd == TUYA_CMD_HEARTBEAT) {
@@ -326,7 +326,7 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
             // MCU is requesting network status - respond with current Zigbee connection status
             uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_DISCONNECTED;
             sendNetworkStatus(status);
-            // debugSerial.printf("Network status request - responding with: %d\n", status);
+            // Network status request received
           }
           
           rxState = TuyaProtocolState::WAIT_HEADER_1;

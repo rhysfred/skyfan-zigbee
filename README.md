@@ -173,13 +173,15 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 3. **Partial Functionality**: Check data point mappings in TuyaProtocol.h
 
 ### Debug Mode
-All the debug statements are currently commented out because the expressif ESP32 board library doesn't have Software Serial included, and installing it from here (https://github.com/plerup/espsoftwareserial) as the seeed wiki suggests is not as simple as it should be. Espsoftwareserial is dependent upon other libraries not included with the expressif board libraries, and I haven't bothered to track them down yet.
+Debug output is available via the USB-C connector using the built-in Serial interface. The debug output provides:
 
-To see debugging once espsoftwareserial is sorted, uncomment debugSerial statements in code for debugging:
-```cpp
-// Uncomment SoftwareSerial includes and setup
-// debugSerial.println("Debug message here");
-```
+- Startup and initialization messages
+- Zigbee connection status and progress
+- Fan and light control commands
+- Status updates from the MCU
+- Error messages and validation failures
+
+Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program.
 
 ## License
 
