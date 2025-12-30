@@ -257,8 +257,12 @@ void setup() {
   // Factory reset button is initialized in constructor
 
   // Set Zigbee device name and model
-  zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_FAN_MODEL_NAME);
-  zbLight.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_LIGHT_MODEL_NAME);
+  zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);
+
+  // Configure device power source as mains-powered (not battery)
+  zbFanControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
+  //zbLight.setPowerSource(ZB_POWER_SOURCE_MAINS);
+  Serial.println("Device configured as mains-powered");
 
   // Configure light colour capabilities to support colour temperature
   zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
@@ -274,14 +278,14 @@ void setup() {
   zbFanControl.onFanDirectionChange(setFanDirection);
   zbLight.onLightChangeTemp(setLight);
 
+  // Add custom manufacturer attributes BEFORE endpoint registration
+  zbFanControl.addCustomAttributes();
+
   //Add endpoints to Zigbee Core
   Serial.println("Adding ZigbeeFanControl endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbFanControl);
   Serial.println("Adding ZigbeeLight endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbLight);
-
-  // Add custom manufacturer attributes
-  zbFanControl.addCustomAttributes();
 
   // When all EPs are registered, start Zigbee in ROUTER mode
   if (!Zigbee.begin(ZIGBEE_ROUTER)) {

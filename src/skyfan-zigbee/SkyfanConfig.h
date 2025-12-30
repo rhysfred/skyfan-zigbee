@@ -24,15 +24,14 @@
 #define FACTORY_RESET_BUTTON_PIN   BOOT_PIN
 #define DEBUG_SERIAL_RX_PIN        21
 #define DEBUG_SERIAL_TX_PIN        20
-#define DEBUG_SERIAL_BAUD_RATE     115200
+#define DEBUG_SERIAL_BAUD_RATE     9600
 #define MCU_SERIAL_BAUD_RATE       115200
 
 // === Zigbee Configuration ===
 #define ZIGBEE_FAN_CONTROL_ENDPOINT    1
 #define ZIGBEE_LIGHT_CONTROL_ENDPOINT  2
 #define ZIGBEE_DEVICE_MANUFACTURER     "Ventair"
-#define ZIGBEE_FAN_MODEL_NAME          "Skyfan"
-#define ZIGBEE_LIGHT_MODEL_NAME        "Skyfan Light"
+#define ZIGBEE_MODEL_NAME          "Skyfan with Light"
 
 // === Timing Configuration ===
 #define TUYA_HEARTBEAT_INTERVAL_MS     10000  // 10 seconds
