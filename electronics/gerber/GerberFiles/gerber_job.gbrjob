@@ -1,0 +1,24 @@
+{
+    "Header": {
+        "Comment": "All values are metric (mm)",
+        "CreationDate": "2025-12-30T10:36:13Z",
+        "GenerationSoftware": {
+            "Application": "Fusion Electronics",
+            "Vendor": "Autodesk",
+            "Version": "9.7.0"
+        },
+        "Part": "Single"
+    },
+    "Overall": {
+        "BoardThickness": 1.6608,
+        "LayerNumber": 2,
+        "Name": {
+            "ProjectId": "Skyfan Controller v0"
+        },
+        "Owner": "R F <rhys.frederick@gmail.com>",
+        "Size": {
+            "X": 25.38,
+            "Y": 27.483
+        }
+    }
+}

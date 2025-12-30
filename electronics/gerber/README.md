@@ -2,20 +2,26 @@
 
 This directory contains the processed manufacturing files exported from Fusion 360 Electronics for PCB fabrication.
 
-## File Contents
+## Directory Structure
 
-### Core PCB Files
-- **Gerber files** (.gbr) - Each PCB layer (copper, soldermask, etc.)
-- **Excellon drill files** (.drl) - Hole drilling information
-- **NC drill files** (.txt) - Numerical control drilling data
+### GerberFiles/
+- **copper_bottom.gbr** - Bottom copper layer
+- **copper_top.gbr** - Top copper layer  
+- **silkscreen_bottom.gbr** - Bottom silkscreen layer
+- **silkscreen_top.gbr** - Top silkscreen layer
+- **soldermask_bottom.gbr** - Bottom soldermask layer
+- **soldermask_top.gbr** - Top soldermask layer
+- **solderpaste_bottom.gbr** - Bottom solderpaste stencil
+- **solderpaste_top.gbr** - Top solderpaste stencil
+- **profile.gbr** - Board outline/profile
+- **gerber_job.gbrjob** - Gerber job file with layer stack information
 
-### Manufacturing Files
-- **Bill of materials** (BOM.csv) - Complete parts list with specifications
+### DrillFiles/
+- **drill_1_16.xln** - Excellon drill file for via and component holes
 
-### Documentation
-- **Silkscreen files** (.gbr) - Component labels and reference designators
-- **Soldermask files** (.gbr) - Solder mask layer definition
-- **Solderpaste files** (.gbr) - Solder paste stencil information
+### Assembly/
+- **PnP_Skyfan Controller v4_front.txt** - Pick and place file for front components
+- **Skyfan Controller v4.txt** - Component placement coordinates
 
 ## Manufacturing Notes
 
