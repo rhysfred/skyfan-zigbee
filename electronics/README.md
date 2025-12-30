@@ -2,38 +2,43 @@
 
 This directory contains the electronic design files for the Skyfan Zigbee Controller hardware.
 
-## Directory Contents
+## Directory Structure
 
-- **Schematic files** - Circuit diagrams showing electrical connections
-- **PCB layout files** - Physical board design and component placement
-- **Component libraries** - Custom symbols and footprints
-- **3D models** - Component 3D representations for visualization
-- **gerber/** - Manufacturing files for PCB production
+### Design Files
+- **SkyFanController.sch** - Eagle schematic file with circuit diagrams
+- **SkyFanController.brd** - Eagle PCB layout file with component placement and routing
+
+### Manufacturing Files
+- **gerber/** - Complete manufacturing file set for PCB production
+  - **GerberFiles/** - Gerber layer files (copper, soldermask, silkscreen, profile)
+  - **DrillFiles/** - Excellon drill files for holes and vias
+  - **Assembly/** - Pick and place files for automated assembly
 
 ## Design Tools
 
-The design files are created using **Autodesk Fusion 360 Electronics**.
-
-## File Naming Convention
-
-- `skyfan-zigbee.fsch` - Main schematic file
-- `skyfan-zigbee.fbrd` - PCB layout file
-- `*.f3d` - Fusion 360 project files
-- `*.lbr` - Component libraries
-- `*.f3z` - Fusion 360 archive files
+The design files are in **Autodesk Eagle** format (.sch/.brd files).
 
 ## Hardware Specifications
 
-- **MCU**: ESP32-C6 with Zigbee support
-- **Power**: 3.3V operation
-- **Connectivity**: UART communication with Tuya MCU
-- **Debug**: Optional SoftwareSerial debug output
-- **Reset**: Factory reset button (BOOT pin)
+- **MCU**: ESP32-C6 with Zigbee 3.0 support
+- **Power**: 3.3V operation from mains adapter
+- **Connectivity**: Hardware UART communication with Tuya MCU (115200 baud)
+- **Debug**: USB-C serial debug output (9600 baud)
+- **Control**: Factory reset button on BOOT pin
+- **Indicators**: Status LED for network state indication
+
+## PCB Specifications
+
+- **Board thickness**: 1.6mm standard
+- **Copper weight**: 1oz (35µm) 
+- **Minimum via size**: 0.2mm
+- **Minimum track width**: 0.1mm
+- **Layer count**: 2-layer PCB (top/bottom copper)
 
 ## Manufacturing
 
-Processed manufacturing files are stored in the `gerber/` subdirectory and include:
-- Gerber files for each PCB layer
-- Excellon drill files
-- Bill of materials (BOM)
-- Silkscreen overlay files
+All manufacturing files are organised in the `gerber/` subdirectory:
+- Complete Gerber layer set for fabrication
+- Excellon drill files (.xln format)
+- Pick and place files for automated assembly
+- Gerber job file with layer stack specifications
