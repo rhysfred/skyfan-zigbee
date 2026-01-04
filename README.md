@@ -6,6 +6,8 @@ A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting
 
 This project implements a Zigbee interface for Ventair Skyfan ceiling fans that use Tuya MCU controllers. It provides bidirectional communication between the Zigbee network and the fan's MCU, enabling control and status reporting for both fan and integrated lighting functions.
 
+Note, this is very much work in progress. HW integration is not yet tested, waiting on PCB to do so. Should you try this? Probably not just yet.
+
 ## Features
 
 ### Build Configuration
@@ -59,11 +61,17 @@ graph TD
     ESP -.->|Fan Control<br/>Endpoint 1| ZC
     ESP -.->|Light Control<br/>Endpoint 2<br/>(WITH_LIGHT only)| ZC
     
-    style ZC fill:#e1f5fe
-    style ESP fill:#f3e5f5
-    style MCU fill:#fff3e0
-    style FAN fill:#e8f5e8
-    style LIGHT fill:#fff8e1
+    classDef coordinator fill:#e1f5fe
+    classDef controller fill:#f3e5f5
+    classDef mcu fill:#fff3e0
+    classDef motor fill:#e8f5e8
+    classDef lighting fill:#fff8e1
+    
+    class ZC coordinator
+    class ESP controller
+    class MCU mcu
+    class FAN motor
+    class LIGHT lighting
 ```
 
 ## Project Structure

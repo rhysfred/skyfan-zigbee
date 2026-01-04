@@ -10,7 +10,7 @@ const e = presets;
 // Made-up manufacturer options for Front Left Speaker
 const manufacturerOptions = {manufacturerCode: 0x1818};
 
-// Manufacturer-specific cluster for fan extensions
+// Manufacturer-specific cluster for fan extensions, also made up.
 m.deviceAddCustomCluster("fanExtensions", {
     ID: 0xFC00,
     manufacturerCode: 0x1818,
