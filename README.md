@@ -47,19 +47,19 @@ Note, this is very much work in progress. HW integration is not yet tested, wait
 
 ```mermaid
 graph TD
-    ZC[Zigbee Coordinator]
-    ESP[ESP32 Controller<br/>Zigbee Router]
-    MCU[Fan MCU Controller<br/>Tuya Protocol]
-    FAN[Fan Motor]
-    LIGHT[LED Lighting]
+    ZC["Zigbee Coordinator"]
+    ESP["ESP32 Controller<br/>Zigbee Router"]
+    MCU["Fan MCU Controller<br/>Tuya Protocol"]
+    FAN["Fan Motor"]
+    LIGHT["LED Lighting"]
     
-    ZC <-->|Zigbee 3.0<br/>Wireless| ESP
-    ESP <-->|Tuya Serial Protocol<br/>UART 115200 baud| MCU
-    MCU -->|PWM Control| FAN
-    MCU -->|PWM Control| LIGHT
+    ZC <-->|"Zigbee 3.0 Wireless"| ESP
+    ESP <-->|"Tuya Serial Protocol UART"| MCU
+    MCU -->|"PWM Control"| FAN
+    MCU -->|"PWM Control"| LIGHT
     
-    ESP -.->|Fan Control<br/>Endpoint 1| ZC
-    ESP -.->|Light Control<br/>Endpoint 2<br/>(WITH_LIGHT only)| ZC
+    ESP -.->|"Fan Control EP1"| ZC
+    ESP -.->|"Light Control EP2"| ZC
     
     classDef coordinator fill:#e1f5fe
     classDef controller fill:#f3e5f5
