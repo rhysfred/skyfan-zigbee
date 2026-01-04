@@ -8,22 +8,32 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 
 ## Features
 
+### Build Configuration
+- **Dual Model Support**: Configurable build for fan-only or fan+light models
+- **Conditional Compilation**: `WITH_LIGHT` define controls light functionality inclusion
+- **Model Variants**: "Ventair Skyfan ZB Adaptor" (fan-only) or "Ventair Skyfan/Light ZB Adaptor" (fan+light)
+
 ### Fan Control
 - **Power**: On/Off control
 - **Speed**: 6 levels (0-5) mapped to Zigbee fan modes (Off/Low/Medium/High)
 - **Mode**: Normal, Eco, Sleep (MCU-only, not exposed to Zigbee)
 - **Direction**: Forward/Reverse (custom Zigbee attribute)
 
-### Light Control  
+### Light Control (WITH_LIGHT enabled)
 - **Power**: On/Off control
 - **Brightness**: 6 levels (0-5) mapped to Zigbee brightness (0-254)
 - **Colour Temperature**: 3 settings (Warm 3000K / Natural 4200K / Cool 6500K)
 
 ### Zigbee Integration
 - **Protocol**: Zigbee 3.0 Router mode
-- **Endpoints**: Separate endpoints for fan (EP1) and light (EP2)
+- **Endpoints**: Fan control (EP1), optional light control (EP2) when WITH_LIGHT enabled
 - **Bidirectional**: Status updates flow both directions (Zigbee ↔ MCU)
-- **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters. It does use a manufacturer extension for Zigbee to support fan direction though (standard Zigbee fan profile is pretty limited).
+- **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters with manufacturer extension for fan direction
+
+### Visual Feedback
+- **Network Status LED**: Visual indication of Zigbee connection state
+- **Command Feedback**: LED flashes for 50ms on Zigbee commands with 15ms off period for overlapping commands
+- **Factory Reset**: Hold BOOT button for 3+ seconds to reset Zigbee settings
 
 ## Hardware Requirements
 
@@ -47,7 +57,7 @@ graph TD
     MCU -->|PWM Control| LIGHT
     
     ESP -.->|Fan Control<br/>Endpoint 1| ZC
-    ESP -.->|Light Control<br/>Endpoint 2| ZC
+    ESP -.->|Light Control<br/>Endpoint 2<br/>(WITH_LIGHT only)| ZC
     
     style ZC fill:#e1f5fe
     style ESP fill:#f3e5f5
@@ -63,10 +73,18 @@ skyfan-zigbee/
 ├── src/
 │   └── skyfan-zigbee/
 │       ├── skyfan-zigbee.ino      # Main Arduino sketch with Zigbee endpoints and callbacks
-│       ├── SkyfanConfig.h         # Centralized configuration constants and utility functions
+│       ├── SkyfanConfig.h         # Configuration constants, enums, and utility functions
+│       ├── SkyfanZigbee.h         # Extended Zigbee fan control class declarations
+│       ├── SkyfanZigbee.cpp       # Extended Zigbee fan control implementation
 │       ├── TuyaProtocol.h         # Tuya serial protocol header with constants and class definitions
 │       ├── TuyaProtocol.cpp       # Tuya serial protocol implementation
-│       └── SkyfanZigbee.h         # Extended Zigbee classes and custom attributes
+│       ├── LedIndicator.h         # LED status indicator class declarations
+│       ├── LedIndicator.cpp       # LED status indicator implementation
+│       ├── ButtonHandler.h        # Non-blocking button handler class declarations
+│       └── ButtonHandler.cpp      # Non-blocking button handler implementation
+├── zigbee2mqtt/
+│   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
+│   └── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
 ├── electronics/
 │   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
 │   └── README.md                  # Electronics design documentation
@@ -94,18 +112,29 @@ skyfan-zigbee/
 
 ## Installation
 
-1. **Configure Arduino IDE**:
+1. **Configure Build Type**:
+   - Open `src/skyfan-zigbee/SkyfanConfig.h`
+   - For fan+light models: Keep `#define WITH_LIGHT` uncommented
+   - For fan-only models: Comment out `#define WITH_LIGHT`
+
+2. **Configure Arduino IDE**:
    - Install ESP32 board package by Expressif (v3.3.5 or later)
    - Select your ESP32C6 board e.g. "XAIO_ESP32C6" or "Adafruit Feather ESP32-C6". If using a board other than the XAIO one, double-check the pinouts in this sketch
+   - Set "Partition Scheme" to "Zigbee ZCZR 4MB with spiffs"
    - Set "Zigbee Mode" to "Zigbee ZCZR (coordinator/router)"
 
-2. **Upload Firmware**:
+3. **Upload Firmware**:
    ```bash
    # Open src/skyfan-zigbee/skyfan-zigbee.ino in Arduino IDE
    # Verify and upload to ESP32-C6
    ```
 
-3. **Hardware Connections**:
+4. **Configure Zigbee2MQTT**:
+   - For fan+light models: Use `zigbee2mqtt/skyfanConverter.mjs`
+   - For fan-only models: Use `zigbee2mqtt/skyfanFanOnlyConverter.mjs`
+   - Copy the appropriate converter to your Zigbee2MQTT external converters directory
+
+5. **Hardware Connections**:
    - Connect ESP32 UART to MCU UART (TX↔RX, RX↔TX)
    - Common ground connection
    - Power ESP32 from appropriate source
@@ -116,27 +145,25 @@ skyfan-zigbee/
 1. Power on the device
 2. Device enters Zigbee joining mode automatically
 3. Use Zigbee coordinator to permit joining and discover device
-4. Two endpoints will be discovered: Fan Control and Light Control
-
-### Factory Reset
-- Hold BOOT button for 3+ seconds to factory reset Zigbee settings
-
-### Status Monitoring
-- Zigbee status changes are sent to MCU via network status commands
-- MCU status changes are reported back to Zigbee coordinator
-- Both fan and light controls support bidirectional updates
+4. Endpoints discovered depend on build configuration:
+   - Fan+Light: Two endpoints (Fan Control and Light Control)
+   - Fan-Only: Single endpoint (Fan Control only)
 
 ### LED Status Indication
-The built-in LED provides visual feedback about the device's network status:
+The built-in LED provides visual feedback about the device's network status and command activity:
 
+#### Network Status
 - **Rapid Flash** (5Hz): Factory new - device has never joined a network and needs pairing
 - **Solid On**: Initialising - device is starting up or attempting to connect to network
 - **Off**: Connected - device is successfully connected to Zigbee coordinator
 
+#### Command Feedback
+- **50ms Flash**: LED flashes briefly when Zigbee commands are received and processed
+
 ## Technical Implementation
 
 ### Extended Zigbee Classes
-The project extends the standard ESP32 Zigbee library classes to add missing functionality:
+The project extends the standard ESP32 Zigbee library classes to add some missing functionality for bi-drectional operation:
 
 ```cpp
 class SkyfanZigbeeFanControl : public ZigbeeFanControl {
@@ -150,15 +177,26 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 ### Bidirectional Communication
 - **Zigbee → MCU**: Zigbee commands trigger Tuya data point updates
 - **MCU → Zigbee**: MCU status reports update Zigbee cluster attributes
-- **Network Sync**: Zigbee connection status communicated to MCU
 
 ## Configuration
 
-### Zigbee Settings
-- **Device ID**: Heating/Cooling Unit with Fan Control and Colour Dimmable Light
-- **Manufacturer**: "Ventair"
-- **Model**: "Skyfan" / "Skyfan Light"
-- **Profile**: Home Automation (HA 1.2)
+### Build Configuration
+Before compiling, configure the target device type in `SkyfanConfig.h`:
+
+```cpp
+// === Feature Configuration ===
+#define WITH_LIGHT  // Comment out to disable light functionality
+```
+
+**Fan+Light Model** (WITH_LIGHT defined):
+- Model: "Ventair Skyfan/Light ZB Adaptor"  
+- Includes light endpoint and controls
+- Use `skyfanConverter.mjs` for Zigbee2MQTT
+
+**Fan-Only Model** (WITH_LIGHT undefined):
+- Model: "Ventair Skyfan ZB Adaptor"
+- Fan controls only, smaller firmware size
+- Use `skyfanFanOnlyConverter.mjs` for Zigbee2MQTT
 
 ### Serial Protocol
 - **Heartbeat**: 10-second intervals
@@ -166,11 +204,6 @@ class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 - **Buffer Size**: 256 bytes for frame processing
 
 ## Troubleshooting
-
-### Common Issues
-1. **No Zigbee Connection**: Check coordinator is in permit-join mode
-2. **No MCU Response**: Verify UART connections and baud rate
-3. **Partial Functionality**: Check data point mappings in TuyaProtocol.h
 
 ### Debug Mode
 Debug output is available via the USB-C connector using the built-in Serial interface. The debug output provides:
@@ -181,7 +214,7 @@ Debug output is available via the USB-C connector using the built-in Serial inte
 - Status updates from the MCU
 - Error messages and validation failures
 
-Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program.
+Debug output runs at 9600 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program. Note yet to test that the usb-c port can be used at the same time that the adaptor is plugged into the fan.
 
 ## License
 

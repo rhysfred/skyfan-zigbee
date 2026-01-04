@@ -21,141 +21,51 @@
 #include <Arduino.h>
 #include "Zigbee.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "zcl/esp_zigbee_zcl_command.h"
+#include "esp_zigbee_attribute.h"
+#include "esp_zigbee_cluster.h"
 #include "SkyfanConfig.h"
 
-// Custom Zigbee Attributes for Skyfan
-#define CUSTOM_ATTR_FAN_DIRECTION 0xF001  // Custom manufacturer attribute for fan direction
-#define VENTAIR_MANUFACTURER_CODE 0x1234  // Custom manufacturer code for Ventair
-
-// Extended ZigbeeFanControl class with public setter methods for status updates
+// Extended ZigbeeFanControl class with custom cluster support
 class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 private:
   void (*fanDirectionCallback)(uint8_t direction) = nullptr;
+  esp_zb_attribute_list_t *customCluster = nullptr;
+  bool customClusterRegistered = false;
 
 public:
   SkyfanZigbeeFanControl(uint8_t endpoint) : ZigbeeFanControl(endpoint) {}
   
+  // Destructor to clean up allocated resources
+  ~SkyfanZigbeeFanControl();
+  
   // Set callback for fan direction changes from Zigbee
-  void onFanDirectionChange(void (*callback)(uint8_t direction)) {
-    fanDirectionCallback = callback;
-  }
+  void onFanDirectionChange(void (*callback)(uint8_t direction));
   
   // Public setter methods for bidirectional status updates
-  bool setFanMode(ZigbeeFanMode mode) {
-    // Update the Zigbee cluster attribute using protected member access
-    esp_zb_attribute_list_t *fan_control_cluster =
-      esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    
-    if (fan_control_cluster) {
-      esp_err_t ret = esp_zb_cluster_update_attr(fan_control_cluster, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (void *)&mode);
-      return (ret == ESP_OK);
-    }
-    return false;
-  }
+  bool setFanMode(ZigbeeFanMode mode);
+  bool setFanState(bool on);
+  bool setFanSpeed(uint8_t speed);
   
-  // Convenience method to set fan state (on/off)
-  bool setFanState(bool on) {
-    ZigbeeFanMode targetMode = on ? FAN_MODE_ON : FAN_MODE_OFF;
-    return setFanMode(targetMode);
-  }
+  // Custom cluster attribute methods for fan direction
+  bool setFanDirection(uint8_t direction);
+  uint8_t getFanDirection() const;
   
-  // Map Tuya speed to appropriate Zigbee fan mode
-  bool setFanSpeed(uint8_t speed) {
-    // Validate input range
-    if (!isValidTuyaFanSpeed(speed)) {
-      return false;
-    }
-    
-    ZigbeeFanMode mode;
-    switch (speed) {
-      case TUYA_FAN_SPEED_MIN:  // 0
-        mode = FAN_MODE_OFF;
-        break;
-      case FAN_SPEED_LOW_TUYA:  // 1
-      case FAN_SPEED_LOW_TUYA + 1:  // 2
-        mode = FAN_MODE_LOW;
-        break;
-      case FAN_SPEED_MEDIUM_TUYA:  // 3
-      case FAN_SPEED_MEDIUM_TUYA + 1:  // 4
-        mode = FAN_MODE_MEDIUM;
-        break;
-      case FAN_SPEED_HIGH_TUYA:  // 5
-        mode = FAN_MODE_HIGH;
-        break;
-      default:
-        mode = FAN_MODE_ON;  // Generic on state for unknown speeds
-        break;
-    }
-    return setFanMode(mode);
-  }
+  // Create and register manufacturer-specific cluster for fan direction  
+  bool createCustomCluster();
   
-  // Custom manufacturer attribute methods for fan direction
-  bool setFanDirection(uint8_t direction) {
-    // Validate direction
-    if (direction > static_cast<uint8_t>(FanDirection::REVERSE)) {
-      return false;
-    }
-    
-    // Update the custom manufacturer attribute
-    esp_zb_attribute_list_t *fan_control_cluster =
-      esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    
-    if (fan_control_cluster) {
-      esp_err_t ret = esp_zb_cluster_update_attr(fan_control_cluster, CUSTOM_ATTR_FAN_DIRECTION, (void *)&direction);
-      return (ret == ESP_OK);
-    }
-    return false;
-  }
+  // Handle custom cluster attribute changes
+  void handleCustomClusterAttributeChange(uint16_t cluster_id, uint16_t attr_id, uint8_t *data);
   
-  uint8_t getFanDirection() {
-    esp_zb_attribute_list_t *fan_control_cluster =
-      esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    
-    if (fan_control_cluster) {
-      // Get the attribute from the cluster
-      esp_zb_zcl_attr_t *attr = esp_zb_zcl_get_attribute(_endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, 
-                                                          ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, CUSTOM_ATTR_FAN_DIRECTION);
-      if (attr && attr->data_p) {
-        return *((uint8_t*)attr->data_p);
-      }
-    }
-    return static_cast<uint8_t>(FanDirection::FORWARD); // Default to forward
-  }
+  // Get custom cluster ID for external reference
+  uint16_t getCustomClusterId() const;
   
-  // Override cluster setup to add custom attributes
-  void addCustomAttributes() {
-    esp_zb_attribute_list_t *fan_control_cluster =
-      esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    
-    if (fan_control_cluster) {
-      // Add custom fan direction attribute with correct parameters
-      uint8_t default_direction = static_cast<uint8_t>(FanDirection::FORWARD);
-      esp_err_t ret = esp_zb_cluster_add_attr(fan_control_cluster, 
-                                               ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL,
-                                               CUSTOM_ATTR_FAN_DIRECTION, 
-                                               ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM, 
-                                               ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, 
-                                               &default_direction);
-      
-      if (ret == ESP_OK) {
-        Serial.println("Added custom fan direction attribute");
-      } else {
-        Serial.printf("Failed to add custom fan direction attribute: %d\n", ret);
-      }
-    }
-  }
+  // Check if custom cluster is registered
+  bool isCustomClusterRegistered() const;
   
-  // Handle attribute changes for custom attributes
-  void handleAttributeChange(uint16_t attr_id, uint8_t *data) {
-    if (attr_id == CUSTOM_ATTR_FAN_DIRECTION && fanDirectionCallback) {
-      uint8_t direction = *data;
-      if (direction <= static_cast<uint8_t>(FanDirection::REVERSE)) {
-        fanDirectionCallback(direction);
-        Serial.printf("Fan direction changed via Zigbee: %d (%s)\n", direction,
-          (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE");
-      }
-    }
-  }
+  // Clean up custom cluster resources
+  void cleanupCustomCluster();
+  
 };
 
 #endif // SKYFAN_ZIGBEE_H

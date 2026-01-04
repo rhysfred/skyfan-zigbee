@@ -17,8 +17,61 @@
 
 #include "TuyaProtocol.h"
 
+#ifdef __DEBUG__
+// Helper function to format packet data for debug output
+void debugLogPacket(const char* direction, uint8_t* packet, uint16_t len) {
+  Serial.print("DEBUG: ");
+  Serial.print(direction);
+  Serial.print(" MCU message ");
+  
+  if (len < 6) {
+    // Invalid packet - just print raw bytes
+    for (uint16_t i = 0; i < len; i++) {
+      Serial.printf("%02X", packet[i]);
+    }
+    Serial.println();
+    return;
+  }
+  
+  // Format as "55AA-version-command-dataLength-data-checksum"
+  uint16_t dataLen = (packet[4] << 8) | packet[5];  // Big-endian data length
+  
+  // Header (55AA)
+  Serial.printf("%02X%02X-", packet[0], packet[1]);
+  
+  // Version
+  Serial.printf("%02X-", packet[2]);
+  
+  // Command
+  Serial.printf("%02X-", packet[3]);
+  
+  // Data Length (2 bytes)
+  Serial.printf("%02X%02X", packet[4], packet[5]);
+  
+  // Data (if any)
+  if (dataLen > 0) {
+    Serial.print("-");
+    for (uint16_t i = 6; i < 6 + dataLen && i < len; i++) {
+      Serial.printf("%02X", packet[i]);
+    }
+  }
+  
+  // Checksum
+  if (len > 6 + dataLen) {
+    Serial.print("-");
+    Serial.printf("%02X", packet[6 + dataLen]);
+  }
+  
+  Serial.println();
+}
+#endif
+
 TuyaProtocol::TuyaProtocol(HardwareSerial* serialInterface) 
-  : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), serial(serialInterface), rxState(TuyaProtocolState::WAIT_HEADER_1), rxIndex(0), expectedLen(0), currentCmd(0) {
+  : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), rollbackCallback(nullptr), serial(serialInterface), rxState(TuyaProtocolState::WAIT_HEADER_1), rxIndex(0), expectedLen(0), currentCmd(0) {
+  // Initialize pending commands array
+  for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
+    pendingCommands[i].active = false;
+  }
 }
 
 void TuyaProtocol::begin(uint32_t baudRate) {
@@ -47,7 +100,7 @@ void TuyaProtocol::update(bool zigbeeConnected) {
   static bool firstRun = true;
   
   if (firstRun || lastZigbeeState != zigbeeConnected) {
-    uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_DISCONNECTED;
+    uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
     sendNetworkStatus(status);
     lastZigbeeState = zigbeeConnected;
     firstRun = false;
@@ -69,7 +122,7 @@ void TuyaProtocol::sendCommand(uint8_t cmd, uint8_t* data, uint16_t len) {
   
   packet[idx++] = (TUYA_HEADER >> 8) & 0xFF;
   packet[idx++] = TUYA_HEADER & 0xFF;
-  packet[idx++] = TUYA_VERSION;
+  packet[idx++] = TUYA_VERSION_MODULE_TO_MCU;
   packet[idx++] = cmd;
   packet[idx++] = (len >> 8) & 0xFF;
   packet[idx++] = len & 0xFF;
@@ -81,6 +134,10 @@ void TuyaProtocol::sendCommand(uint8_t cmd, uint8_t* data, uint16_t len) {
   
   uint8_t checksum = calculateChecksum(&packet[2], idx - 2);
   packet[idx++] = checksum;
+  
+#ifdef __DEBUG__
+  debugLogPacket("Write", packet, idx);
+#endif
   
   serial->write(packet, idx);
   serial->flush();
@@ -97,12 +154,18 @@ void TuyaProtocol::sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value) {
     data[dataLen++] = 0x00;
     data[dataLen++] = 0x01;
     data[dataLen++] = value ? 0x01 : 0x00;
-  } else if (type == DP_TYPE_VALUE || type == DP_TYPE_ENUM) {
+  } else if (type == DP_TYPE_VALUE) {
     data[dataLen++] = 0x00;
     data[dataLen++] = 0x04;
+    // 4-byte value in big-endian format
     data[dataLen++] = (value >> 24) & 0xFF;
     data[dataLen++] = (value >> 16) & 0xFF;
     data[dataLen++] = (value >> 8) & 0xFF;
+    data[dataLen++] = value & 0xFF;
+  } else if (type == DP_TYPE_ENUM) {
+    data[dataLen++] = 0x00;
+    data[dataLen++] = 0x01;
+    // 1-byte enum value
     data[dataLen++] = value & 0xFF;
   }
   
@@ -178,6 +241,17 @@ void TuyaProtocol::sendHeartbeat() {
 
 void TuyaProtocol::sendNetworkStatus(uint8_t status) {
   sendCommand(TUYA_CMD_NETWORK_STATUS, &status, 1);
+}
+
+void TuyaProtocol::sendProductInfo() {
+  // Send minimal product info response - empty data
+  sendCommand(TUYA_CMD_PRODUCT_INFO, nullptr, 0);
+}
+
+void TuyaProtocol::sendWorkMode() {
+  // Send work mode response - 0x00 for standard mode
+  uint8_t workMode = 0x00;
+  sendCommand(TUYA_CMD_QUERY_WORK_MODE, &workMode, 1);
 }
 
 void TuyaProtocol::setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value)) {
@@ -302,10 +376,16 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
                 value = rxBuffer[dataIndex];
                 dataIndex += 1;
                 validDataPoint = true;
-              } else if ((type == DP_TYPE_VALUE || type == DP_TYPE_ENUM) && len == 4) {
+              } else if (type == DP_TYPE_VALUE && len == 4) {
+                // 4-byte value in big-endian format
                 value = (rxBuffer[dataIndex] << 24) | (rxBuffer[dataIndex + 1] << 16) | 
                         (rxBuffer[dataIndex + 2] << 8) | rxBuffer[dataIndex + 3];
                 dataIndex += 4;
+                validDataPoint = true;
+              } else if (type == DP_TYPE_ENUM && len == 1) {
+                // 1-byte enum value
+                value = rxBuffer[dataIndex];
+                dataIndex += 1;
                 validDataPoint = true;
               } else {
                 // Skip unknown or invalid data point
@@ -315,6 +395,9 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
               
               // Call status callback if we have a valid data point and callback is registered
               if (validDataPoint && deviceStatusCallback) {
+                // Check if this status response matches a pending command
+                isStatusResponseForPendingCommand(dpid, value);
+                
                 deviceStatusCallback(dpid, value);
                 // Status update received
               }
@@ -322,12 +405,23 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
           } else if (currentCmd == TUYA_CMD_HEARTBEAT) {
             tuyaConnected = true;
             lastHeartbeat = millis();
+          } else if (currentCmd == TUYA_CMD_PRODUCT_INFO) {
+            // MCU is requesting product info - send basic response
+            sendProductInfo();
+          } else if (currentCmd == TUYA_CMD_QUERY_WORK_MODE) {
+            // MCU is requesting work mode - send basic response  
+            sendWorkMode();
           } else if (currentCmd == TUYA_CMD_NETWORK_STATUS) {
             // MCU is requesting network status - respond with current Zigbee connection status
-            uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_DISCONNECTED;
+            uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
             sendNetworkStatus(status);
             // Network status request received
           }
+          
+#ifdef __DEBUG__
+          // Log received packet
+          debugLogPacket("Read", rxBuffer, rxIndex);
+#endif
           
           rxState = TuyaProtocolState::WAIT_HEADER_1;
           rxIndex = 0;
@@ -340,4 +434,71 @@ void TuyaProtocol::processResponse(bool zigbeeConnected) {
 
 bool TuyaProtocol::isConnected() const {
   return tuyaConnected;
+}
+
+// Set callback for rollback operations
+void TuyaProtocol::setRollbackCallback(void (*callback)(CommandType type)) {
+  rollbackCallback = callback;
+}
+
+// Send data point with command tracking
+bool TuyaProtocol::sendDataPointWithTracking(uint8_t dpid, uint8_t type, uint32_t value, CommandType cmdType) {
+  // Send command and wait for ACK (synchronous)
+  sendDataPoint(dpid, type, value);
+  
+  // Add to pending commands for 1.5s status monitoring
+  addPendingCommand(dpid, value, cmdType);
+  
+  return true; // sendDataPoint includes waitForResponse
+}
+
+// Add command to pending list
+void TuyaProtocol::addPendingCommand(uint8_t dpid, uint32_t expectedValue, CommandType cmdType) {
+  // Find empty slot
+  for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
+    if (!pendingCommands[i].active) {
+      pendingCommands[i].active = true;
+      pendingCommands[i].dpid = dpid;
+      pendingCommands[i].expectedValue = expectedValue;
+      pendingCommands[i].commandType = cmdType;
+      pendingCommands[i].statusTimeout = millis() + TUYA_STATUS_RESPONSE_TIMEOUT_MS;
+      return;
+    }
+  }
+  // If we get here, no slots available - oldest command will timeout anyway
+}
+
+// Clear pending command
+void TuyaProtocol::clearPendingCommand(int index) {
+  if (index >= 0 && index < MAX_PENDING_COMMANDS) {
+    pendingCommands[index].active = false;
+  }
+}
+
+// Check if incoming status matches a pending command
+bool TuyaProtocol::isStatusResponseForPendingCommand(uint8_t dpid, uint32_t value) {
+  for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
+    if (pendingCommands[i].active && 
+        pendingCommands[i].dpid == dpid && 
+        pendingCommands[i].expectedValue == value) {
+      clearPendingCommand(i);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Check for command timeouts
+void TuyaProtocol::checkPendingCommandTimeouts() {
+  unsigned long now = millis();
+  
+  for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
+    if (pendingCommands[i].active && now >= pendingCommands[i].statusTimeout) {
+      // Command timed out - trigger rollback
+      if (rollbackCallback) {
+        rollbackCallback(pendingCommands[i].commandType);
+      }
+      clearPendingCommand(i);
+    }
+  }
 }

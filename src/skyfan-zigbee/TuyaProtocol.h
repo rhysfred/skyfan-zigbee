@@ -20,17 +20,27 @@
 
 #include <Arduino.h>
 #include "SkyfanConfig.h"
-// #include <SoftwareSerial.h>
 
-// External debug serial reference
-// extern SoftwareSerial debugSerial;
+// Pending command structure for tracking command completion
+struct PendingCommand {
+  bool active;                    // Whether this slot is in use
+  uint8_t dpid;                   // Data point ID
+  uint32_t expectedValue;         // Expected value from status report
+  CommandType commandType;        // Type of command for rollback
+  unsigned long statusTimeout;    // When 1.5s timeout expires
+  
+  PendingCommand() : active(false) {}
+};
 
 // Tuya Serial Protocol Configuration
 #define TUYA_HEADER 0x55AA
-#define TUYA_VERSION 0x03
+#define TUYA_VERSION_MODULE_TO_MCU 0x00  // Module (us) sending to MCU
+#define TUYA_VERSION_MCU_TO_MODULE 0x03  // MCU responding to module
 #define TUYA_CMD_HEARTBEAT 0x00
 #define TUYA_CMD_PRODUCT_INFO 0x01
+#define TUYA_CMD_QUERY_WORK_MODE 0x02
 #define TUYA_CMD_NETWORK_STATUS 0x03
+#define TUYA_CMD_RESET_WIFI 0x04
 #define TUYA_CMD_SEND_COMMAND 0x06
 #define TUYA_CMD_STATUS_REPORT 0x07
 
@@ -64,9 +74,10 @@
 #define COLOUR_TEMP_NATURAL 1 // 4200K
 #define COLOUR_TEMP_COOL 2    // 6500K
 
-// Network Status Codes (mapped from WiFi to Zigbee)
-#define NETWORK_STATUS_DISCONNECTED 3  // Zigbee not connected to coordinator
-#define NETWORK_STATUS_CONNECTED 5     // Zigbee connected to coordinator
+// Network Status Codes (WiFi protocol mapped to Zigbee states)
+#define NETWORK_STATUS_NOT_JOINED     0x00  // Zigbee not joined to network
+#define NETWORK_STATUS_JOINED_NO_CONN 0x02  // Zigbee joined but not connected to coordinator
+#define NETWORK_STATUS_CONNECTED      0x03  // Zigbee connected to coordinator
 
 class TuyaProtocol {
 private:
@@ -83,6 +94,10 @@ private:
   uint16_t rxIndex;
   uint16_t expectedLen;
   uint8_t currentCmd;
+  
+  // Command tracking for two-phase confirmation
+  PendingCommand pendingCommands[MAX_PENDING_COMMANDS];
+  void (*rollbackCallback)(CommandType type);
 
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
@@ -95,6 +110,8 @@ public:
   void sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value);
   void sendHeartbeat();
   void sendNetworkStatus(uint8_t status);
+  void sendProductInfo();
+  void sendWorkMode();
   
   // Fan control functions (return false on validation failure)
   bool setFanSwitch(bool on);
@@ -111,6 +128,14 @@ public:
   bool isConnected() const;
   void processResponse(bool zigbeeConnected);
   void setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value));
+  void setRollbackCallback(void (*callback)(CommandType type));
+  
+  // Command tracking functions
+  bool sendDataPointWithTracking(uint8_t dpid, uint8_t type, uint32_t value, CommandType cmdType);
+  void checkPendingCommandTimeouts();
+  void addPendingCommand(uint8_t dpid, uint32_t expectedValue, CommandType cmdType);
+  void clearPendingCommand(int index);
+  bool isStatusResponseForPendingCommand(uint8_t dpid, uint32_t value);
   
   // Utility functions
   static uint8_t calculateChecksum(uint8_t* data, uint16_t len);

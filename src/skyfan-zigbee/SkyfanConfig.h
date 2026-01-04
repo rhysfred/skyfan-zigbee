@@ -20,6 +20,10 @@
 
 #include <Arduino.h>
 
+// === Feature Configuration ===
+#define WITH_LIGHT  // Comment out to disable light functionality
+// #define __DEBUG__   // Comment out to disable debug logging
+
 // === Hardware Configuration ===
 #define FACTORY_RESET_BUTTON_PIN   BOOT_PIN
 #define DEBUG_SERIAL_RX_PIN        21
@@ -29,28 +33,30 @@
 
 // === Zigbee Configuration ===
 #define ZIGBEE_FAN_CONTROL_ENDPOINT    1
+#ifdef WITH_LIGHT
 #define ZIGBEE_LIGHT_CONTROL_ENDPOINT  2
+#endif
 #define ZIGBEE_DEVICE_MANUFACTURER     "Front Left Speaker"
-#define ZIGBEE_MODEL_NAME          "Ventair Skyfan w. Light Ctrlr"
+#ifdef WITH_LIGHT
+#define ZIGBEE_MODEL_NAME          "Ventair Skyfan/Light ZB Adaptor"
+#else
+#define ZIGBEE_MODEL_NAME          "Ventair Skyfan ZB Adaptor"
+#endif
+
+// === Custom Cluster Configuration ===
+#define VENTAIR_CUSTOM_CLUSTER_ID      0xFC00  // Custom cluster ID. Made up but must be > ESP_ZB_CUSTOM_CLUSTER_ID_MIN_VAL
+#define FLS_MANUFACTURER_CODE          0x1818  // Front Left Speaker manufacturer code. Again made up. Meant to be registered
+#define CUSTOM_ATTR_FAN_DIRECTION      0x0001  // Custom attribute ID for fan direction
 
 // === Timing Configuration ===
 #define TUYA_HEARTBEAT_INTERVAL_MS     10000  // 10 seconds
 #define TUYA_CONNECTION_TIMEOUT_MS     30000  // 30 seconds
 #define TUYA_RESPONSE_TIMEOUT_MS       1000   // 1 second
-#define TUYA_COMMAND_TIMEOUT_MS        500    // 0.5 seconds
-#define FACTORY_RESET_HOLD_TIME_MS     3000   // 3 seconds
-#define BUTTON_DEBOUNCE_DELAY_MS       100    // 100ms
-#define BUTTON_POLL_DELAY_MS           50     // 50ms
-#define MAIN_LOOP_DELAY_MS             100    // 100ms
+#define TUYA_COMMAND_TIMEOUT_MS        500    // 0.5 seconds - ACK timeout
+#define TUYA_STATUS_RESPONSE_TIMEOUT_MS 1500  // 1.5 seconds - Status report timeout per Tuya spec
 #define ZIGBEE_CONNECTION_POLL_MS      100    // 100ms
 #define FACTORY_RESET_DELAY_MS         1000   // 1 second
 
-// === LED Status Indication Timing ===
-#define LED_STATUS_UPDATE_INTERVAL_MS  100    // Check LED status every 100ms
-#define LED_FLASH_ON_TIME_MS           200    // Flash duration when connected
-#define LED_FLASH_INTERVAL_MS          5000   // Flash every 5 seconds when connected
-#define LED_RAPID_FLASH_ON_TIME_MS     100    // Rapid flash on time (initialising)
-#define LED_RAPID_FLASH_OFF_TIME_MS    100    // Rapid flash off time (initialising)
 
 // === Colour Temperature Configuration ===
 // Kelvin values for each temperature setting
@@ -83,8 +89,25 @@
 // === Buffer Configuration ===
 #define TUYA_BUFFER_SIZE               256
 #define TUYA_RX_BUFFER_SIZE            256
+#define MAX_PENDING_COMMANDS           5      // Maximum simultaneous pending commands
+
+// === Custom Cluster Role ===
+enum class CustomClusterRole : uint8_t {
+  SERVER = 0,
+  CLIENT = 1
+};
 
 // === Enhanced Enums ===
+
+// Command types for pending command tracking
+enum class CommandType : uint8_t {
+  FAN_SWITCH = 0,
+  FAN_SPEED = 1,
+  FAN_DIRECTION = 2,
+  LIGHT_SWITCH = 3,
+  LIGHT_BRIGHTNESS = 4,
+  LIGHT_COLOR_TEMP = 5
+};
 
 // Colour temperature levels with clear naming
 enum class ColourTempLevel : uint8_t {
@@ -107,12 +130,6 @@ enum class FanDirection : uint8_t {
 };
 
 // Protocol states for better state machine readability
-// LED status states for visual indication
-enum class LedStatus : uint8_t {
-  FACTORY_NEW = 0,    // Rapid flash - device never joined network
-  INITIALISING = 1,   // Solid on - device starting up
-  CONNECTED = 2       // Off - device connected to network
-};
 
 enum class TuyaProtocolState : uint8_t {
   WAIT_HEADER_1 = 0,
@@ -218,169 +235,6 @@ inline uint8_t tuyaBrightnessToZigbee(uint8_t tuyaBrightness) {
   return map(clamped, TUYA_BRIGHTNESS_MIN, TUYA_BRIGHTNESS_MAX, ZIGBEE_BRIGHTNESS_MIN, ZIGBEE_BRIGHTNESS_MAX);
 }
 
-// === LED Status Indicator Class ===
 
-class LedStatusIndicator {
-private:
-  uint8_t pin;
-  LedStatus currentStatus;
-  bool ledState;
-  unsigned long lastUpdate;
-  unsigned long lastFlashStart;
-  
-public:
-  LedStatusIndicator(uint8_t ledPin) 
-    : pin(ledPin), currentStatus(LedStatus::INITIALISING), ledState(false), lastUpdate(0), lastFlashStart(0) {
-    pinMode(pin, OUTPUT);
-    digitalWrite(pin, LOW);
-  }
-  
-  void update() {
-    unsigned long now = millis();
-    
-    if (now - lastUpdate < LED_STATUS_UPDATE_INTERVAL_MS) {
-      return; // Not time to update yet
-    }
-    lastUpdate = now;
-    
-    switch (currentStatus) {
-      case LedStatus::FACTORY_NEW:
-        // Rapid flash - 5 times per second (100ms on, 100ms off)
-        if (now - lastFlashStart >= LED_RAPID_FLASH_ON_TIME_MS + LED_RAPID_FLASH_OFF_TIME_MS) {
-          lastFlashStart = now;
-          ledState = true;
-          digitalWrite(pin, HIGH);
-        } else if (ledState && (now - lastFlashStart >= LED_RAPID_FLASH_ON_TIME_MS)) {
-          ledState = false;
-          digitalWrite(pin, LOW);
-        }
-        break;
-        
-      case LedStatus::INITIALISING:
-        // Solid on
-        if (!ledState) {
-          ledState = true;
-          digitalWrite(pin, HIGH);
-        }
-        break;
-        
-      case LedStatus::CONNECTED:
-        // Off
-        if (ledState) {
-          ledState = false;
-          digitalWrite(pin, LOW);
-        }
-        break;
-    }
-  }
-  
-  void setStatus(LedStatus status) {
-    if (currentStatus != status) {
-      currentStatus = status;
-      lastFlashStart = millis(); // Reset timing when status changes
-      
-      // Immediate state change for specific states
-      if (status == LedStatus::INITIALISING) {
-        ledState = true;
-        digitalWrite(pin, HIGH);
-      } else if (status == LedStatus::CONNECTED) {
-        ledState = false;
-        digitalWrite(pin, LOW);
-      }
-    }
-  }
-  
-  LedStatus getStatus() const {
-    return currentStatus;
-  }
-};
-
-// === Non-blocking Button Debounce Class ===
-
-class DebouncedButton {
-private:
-  uint8_t pin;
-  unsigned long lastStateChange;
-  unsigned long lastPressTime;
-  bool lastState;
-  bool currentState;
-  bool pressed;
-  bool longPressed;
-  unsigned long debounceDelay;
-  unsigned long longPressDelay;
-
-public:
-  DebouncedButton(uint8_t buttonPin, unsigned long debounceMs = BUTTON_DEBOUNCE_DELAY_MS, unsigned long longPressMs = FACTORY_RESET_HOLD_TIME_MS) 
-    : pin(buttonPin), lastStateChange(0), lastPressTime(0), lastState(HIGH), currentState(HIGH), 
-      pressed(false), longPressed(false), debounceDelay(debounceMs), longPressDelay(longPressMs) {
-    pinMode(pin, INPUT_PULLUP);
-  }
-
-  // Call this in loop() to update button state
-  void update() {
-    bool reading = digitalRead(pin);
-    
-    // Reset debouncing timer if state changed
-    if (reading != lastState) {
-      lastStateChange = millis();
-    }
-    
-    // State has been stable long enough to be considered valid
-    if ((millis() - lastStateChange) > debounceDelay) {
-      // State has actually changed
-      if (reading != currentState) {
-        currentState = reading;
-        
-        if (currentState == LOW) {  // Button pressed (active low with pullup)
-          lastPressTime = millis();
-          pressed = true;
-          longPressed = false;
-        }
-      }
-      
-      // Check for long press while button is held
-      if (currentState == LOW && !longPressed) {
-        if ((millis() - lastPressTime) > longPressDelay) {
-          longPressed = true;
-        }
-      }
-      
-      // Reset pressed flag when button released
-      if (currentState == HIGH && pressed) {
-        pressed = false;
-      }
-    }
-    
-    lastState = reading;
-  }
-  
-  // Check if button was just pressed (single shot)
-  bool wasPressed() {
-    if (pressed && currentState == HIGH) {  // Just released after being pressed
-      pressed = false;
-      return !longPressed;  // Only return true if it wasn't a long press
-    }
-    return false;
-  }
-  
-  // Check if button was long pressed (single shot)
-  bool wasLongPressed() {
-    if (longPressed && currentState == HIGH) {  // Just released after long press
-      longPressed = false;
-      return true;
-    }
-    return false;
-  }
-  
-  // Check if button is currently being long pressed
-  bool isLongPressed() const {
-    return longPressed && currentState == LOW;
-  }
-  
-  // Check if button is currently pressed
-  bool isPressed() const {
-    return currentState == LOW;
-  }
-};
 
 #endif // SKYFAN_CONFIG_H

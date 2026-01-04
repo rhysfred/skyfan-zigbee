@@ -1,6 +1,6 @@
 # Electronics Design Files
 
-This directory contains the electronic design files for the Skyfan Zigbee Controller hardware.
+This directory contains the electronic design files for the Skyfan Zigbee Controller hardware. The design supports both fan-only and fan+light configurations through firmware build options.
 
 ## Directory Structure
 
@@ -16,16 +16,17 @@ This directory contains the electronic design files for the Skyfan Zigbee Contro
 
 ## Design Tools
 
-The design files are in **Autodesk Eagle** format (.sch/.brd files).
+The design files are in **Autodesk Eagle** format (.sch/.brd/.fz3 files).
 
 ## Hardware Specifications
 
-- **MCU**: ESP32-C6 with Zigbee 3.0 support
-- **Power**: 3.3V operation from mains adapter
+- **MCU**: ESP32-C6 with Zigbee 3.0 support  
+- **Power**: 3.3V operation provided by fan
 - **Connectivity**: Hardware UART communication with Tuya MCU (115200 baud)
-- **Debug**: USB-C serial debug output (9600 baud)
+- **Debug**: USB-C serial debug output (configurable baud rate)
 - **Control**: Factory reset button on BOOT pin
-- **Indicators**: Status LED for network state indication
+- **Indicators**: Status LED for network state and command feedback
+- **Configuration**: Supports fan-only or fan+light firmware builds
 
 ## PCB Specifications
 
