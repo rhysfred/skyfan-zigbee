@@ -24,6 +24,12 @@
 #define WITH_LIGHT  // Comment out to disable light functionality
 // #define __DEBUG__   // Comment out to disable debug logging
 
+// === Firmware Version ===
+// Injected at build time by CI; fallback for local builds
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev-local"
+#endif
+
 // === Hardware Configuration ===
 #define FACTORY_RESET_BUTTON_PIN   BOOT_PIN
 #define DEBUG_SERIAL_RX_PIN        21

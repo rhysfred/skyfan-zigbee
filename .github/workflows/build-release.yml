@@ -1,0 +1,318 @@
+# Skyfan Zigbee Firmware - Build and Release Workflow
+#
+# Triggers:
+#   - Push to main: Creates rolling dev-latest pre-release
+#   - Version tags (v*): Creates formal release (stable or pre-release)
+#
+# Release types:
+#   - v1.0.0         -> Stable release (marked as "latest")
+#   - v1.0.0-beta.1  -> Pre-release (beta)
+#   - v1.0.0-rc.1    -> Pre-release (release candidate)
+#   - v1.0.0-alpha.1 -> Pre-release (alpha)
+#   - dev-latest     -> Rolling development build (pre-release)
+
+name: Build and Release Firmware
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (for manual triggers)'
+        required: false
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+
+env:
+  SKETCH_PATH: src/skyfan-zigbee/skyfan-zigbee.ino
+  BOARD_FQBN: esp32:esp32:esp32c6
+  FIRMWARE_NAME: skyfan-zigbee
+
+jobs:
+  # ==========================================================================
+  # Prepare: Determine build context, version string, and release type
+  # ==========================================================================
+  prepare:
+    name: Prepare Build Context
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_release: ${{ steps.context.outputs.is_release }}
+      is_prerelease: ${{ steps.context.outputs.is_prerelease }}
+      is_dev: ${{ steps.context.outputs.is_dev }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine build context
+        id: context
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            echo "Building for tag: $TAG"
+
+            if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              # Stable release: v1.0.0
+              echo "Detected: Stable release"
+              echo "is_release=true" >> $GITHUB_OUTPUT
+              echo "is_prerelease=false" >> $GITHUB_OUTPUT
+              echo "is_dev=false" >> $GITHUB_OUTPUT
+            elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
+              # Pre-release: v1.0.0-beta.1, v1.0.0-rc.1, v1.0.0-alpha.1
+              echo "Detected: Pre-release"
+              echo "is_release=true" >> $GITHUB_OUTPUT
+              echo "is_prerelease=true" >> $GITHUB_OUTPUT
+              echo "is_dev=false" >> $GITHUB_OUTPUT
+            else
+              echo "::error::Invalid tag format: $TAG. Expected v1.0.0 or v1.0.0-beta.1"
+              exit 1
+            fi
+          else
+            # Push to main branch - development build
+            echo "Detected: Development build (main branch)"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_dev=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine version string
+        id: version
+        run: |
+          if [[ "${{ steps.context.outputs.is_dev }}" == "true" ]]; then
+            # Development build: dev-<short_sha>
+            SHORT_SHA=$(git rev-parse --short=7 HEAD)
+            VERSION="dev-${SHORT_SHA}"
+            echo "Version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            # Tag-based release: use the tag name
+            VERSION="${{ github.ref_name }}"
+            echo "Version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+  # ==========================================================================
+  # Build: Compile firmware with arduino-cli
+  # ==========================================================================
+  build:
+    name: Build Firmware
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Configure Arduino CLI
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      - name: Install ESP32 platform
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.5
+
+      - name: Show board options (for verification)
+        run: |
+          echo "Available board options for ${{ env.BOARD_FQBN }}:"
+          arduino-cli board details --fqbn "${{ env.BOARD_FQBN }}" | grep -E "(Option|PartitionScheme|ZigbeeMode)" || true
+
+      - name: Compile firmware
+        run: |
+          echo "Compiling firmware version: ${{ needs.prepare.outputs.version }}"
+
+          # Dev builds include debug logging; release builds do not
+          if [[ "${{ needs.prepare.outputs.is_dev }}" == "true" ]]; then
+            EXTRA_FLAGS="-DWITH_LIGHT -D__DEBUG__ -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\""
+            echo "Dev build: Debug logging ENABLED"
+          else
+            EXTRA_FLAGS="-DWITH_LIGHT -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\""
+            echo "Release build: Debug logging DISABLED"
+          fi
+
+          # Board options for ESP32-C6 with Zigbee (verified from boards.txt):
+          #   - Partition Scheme: "Zigbee ZCZR 4MB with spiffs" -> zigbee_zczr
+          #   - Zigbee Mode: "Zigbee ZCZR (coordinator/router)" -> zczr
+
+          arduino-cli compile \
+            --fqbn "${{ env.BOARD_FQBN }}:PartitionScheme=zigbee_zczr,ZigbeeMode=zczr" \
+            --build-property "compiler.cpp.extra_flags=$EXTRA_FLAGS" \
+            --output-dir ./build \
+            "${{ env.SKETCH_PATH }}"
+
+      - name: Prepare artifacts
+        run: |
+          # Find the compiled binary (name varies by arduino-cli version)
+          BIN_FILE=$(find ./build -name "*.ino.bin" -o -name "*.bin" | head -1)
+
+          if [[ -z "$BIN_FILE" ]]; then
+            echo "::error::No binary file found in build output"
+            ls -la ./build/
+            exit 1
+          fi
+
+          echo "Found binary: $BIN_FILE"
+
+          # Create artifacts directory
+          mkdir -p ./artifacts
+
+          # Copy and rename firmware with consistent name
+          cp "$BIN_FILE" "./artifacts/${{ env.FIRMWARE_NAME }}.bin"
+
+          # Generate SHA256 checksum
+          cd ./artifacts
+          sha256sum "${{ env.FIRMWARE_NAME }}.bin" > "${{ env.FIRMWARE_NAME }}.bin.sha256"
+
+          # Create firmware metadata JSON
+          cat > firmware-info.json << EOF
+          {
+            "version": "${{ needs.prepare.outputs.version }}",
+            "filename": "${{ env.FIRMWARE_NAME }}.bin",
+            "sha256": "$(cat ${{ env.FIRMWARE_NAME }}.bin.sha256 | cut -d' ' -f1)",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${{ github.sha }}",
+            "is_prerelease": ${{ needs.prepare.outputs.is_prerelease }},
+            "is_dev": ${{ needs.prepare.outputs.is_dev }},
+            "debug_enabled": ${{ needs.prepare.outputs.is_dev }},
+            "board": "${{ env.BOARD_FQBN }}"
+          }
+          EOF
+
+          echo "Artifacts prepared:"
+          ls -la
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ needs.prepare.outputs.version }}
+          path: ./artifacts/
+          retention-days: 90
+
+  # ==========================================================================
+  # Release Dev: Create/update rolling dev-latest pre-release
+  # ==========================================================================
+  release-dev:
+    name: Release Development Build
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_dev == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-${{ needs.prepare.outputs.version }}
+          path: ./artifacts
+
+      - name: Delete existing dev-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete existing release if it exists (ignore errors if not found)
+          gh release delete dev-latest --yes 2>/dev/null || true
+
+          # Delete the tag if it exists (for clean recreation)
+          git push --delete origin dev-latest 2>/dev/null || true
+
+      - name: Create dev-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create dev-latest \
+            ./artifacts/* \
+            --title "Development Build (${{ needs.prepare.outputs.version }})" \
+            --prerelease \
+            --notes "## Development Build
+
+          **Version:** \`${{ needs.prepare.outputs.version }}\`
+          **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+          **Built:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          ---
+
+          > **Warning**: This is an automated development build from the main branch.
+          > Not recommended for production use.
+
+          For stable releases, see the [latest stable release](../../releases/latest).
+
+          ### OTA Update URL
+          \`\`\`
+          https://github.com/${{ github.repository }}/releases/download/dev-latest/${{ env.FIRMWARE_NAME }}.bin
+          \`\`\`
+
+          ### Checksums
+          See \`${{ env.FIRMWARE_NAME }}.bin.sha256\` for SHA256 verification."
+
+  # ==========================================================================
+  # Release Formal: Create immutable versioned release
+  # ==========================================================================
+  release-formal:
+    name: Release Formal Version
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-${{ needs.prepare.outputs.version }}
+          path: ./artifacts
+
+      - name: Create formal release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Determine if this is a pre-release
+          PRERELEASE_FLAG=""
+          STABILITY_MSG=""
+
+          if [[ "${{ needs.prepare.outputs.is_prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+            STABILITY_MSG="> **Note**: This is a pre-release version. Use with caution."
+          else
+            STABILITY_MSG="**Stable release** - recommended for production use."
+          fi
+
+          gh release create "${{ github.ref_name }}" \
+            ./artifacts/* \
+            --title "Skyfan Zigbee ${{ github.ref_name }}" \
+            --generate-notes \
+            $PRERELEASE_FLAG \
+            --notes "## Skyfan Zigbee Firmware ${{ github.ref_name }}
+
+          $STABILITY_MSG
+
+          ### Installation
+
+          Download \`${{ env.FIRMWARE_NAME }}.bin\` and flash to your ESP32-C6 device.
+
+          ### OTA Update URL
+          \`\`\`
+          https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.FIRMWARE_NAME }}.bin
+          \`\`\`
+
+          ### Checksums
+          See \`${{ env.FIRMWARE_NAME }}.bin.sha256\` for SHA256 verification.
+
+          ---
+
+          $(gh release view "${{ github.ref_name }}" --json body -q .body 2>/dev/null || echo '')"

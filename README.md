@@ -222,6 +222,8 @@ Debug output is available via the USB-C connector using the built-in Serial inte
 - Status updates from the MCU
 - Error messages and validation failures
 
+**Enhanced Protocol Debug**: For detailed MCU and Zigbee protocol traces, uncomment `// #define __DEBUG__` in `SkyfanConfig.h` before compilation.
+
 Debug output runs at 9600 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program. Note yet to test that the usb-c port can be used at the same time that the adaptor is plugged into the fan.
 
 ## License
