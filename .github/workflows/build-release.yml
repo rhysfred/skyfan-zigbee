@@ -250,14 +250,14 @@ jobs:
 
       - name: Create OTA image
         run: |
-          cd ./artifacts
-
           # Install required Python dependency
           pip install zigpy
 
-          # Download the image builder tool from esp-zigbee-sdk
-          curl -sL -o image_builder_tool.py \
+          # Download the image builder tool from esp-zigbee-sdk (to temp location)
+          curl -sL -o /tmp/image_builder_tool.py \
             "https://raw.githubusercontent.com/espressif/esp-zigbee-sdk/main/tools/image_builder_tool/image_builder_tool.py"
+
+          cd ./artifacts
 
           # Create OTA image file
           # --create: output OTA file
@@ -265,7 +265,7 @@ jobs:
           # --version: OTA file version (decimal)
           # --manuf-id: manufacturer code (0x1818 = 6168)
           # --image-type: image type identifier (0x0001 = 1)
-          python3 image_builder_tool.py \
+          python3 /tmp/image_builder_tool.py \
             --create "${{ env.FIRMWARE_NAME }}.ota" \
             --tag-file "${{ env.FIRMWARE_NAME }}.bin" \
             --version ${{ needs.prepare.outputs.ota_version_decimal }} \
