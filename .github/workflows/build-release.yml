@@ -252,6 +252,9 @@ jobs:
         run: |
           cd ./artifacts
 
+          # Install required Python dependency
+          pip install zigpy
+
           # Download the image builder tool from esp-zigbee-sdk
           curl -sL -o image_builder_tool.py \
             "https://raw.githubusercontent.com/espressif/esp-zigbee-sdk/main/tools/image_builder_tool/image_builder_tool.py"
