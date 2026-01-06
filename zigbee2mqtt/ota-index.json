@@ -1,2 +1,9 @@
 [
+  {
+    "url": "https://github.com/rhysfred/skyfan-zigbee/releases/download/v0.0.5-alpha.2/skyfan-zigbee.ota",
+    "manufacturerCode": 6168,
+    "imageType": 1,
+    "fileVersion": 663552,
+    "modelId": "Ventair Skyfan/Light ZB Adaptor"
+  }
 ]
