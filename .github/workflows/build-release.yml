@@ -369,14 +369,56 @@ jobs:
           ### Checksums
           See \`.sha256\` files for SHA256 verification."
 
+      - name: Update dev-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete existing dev-latest release if it exists
+          gh release delete dev-latest --yes --cleanup-tag 2>/dev/null || true
+
+          # Create new dev-latest release with same artifacts
+          DEV_TAG="${{ needs.prepare.outputs.version }}"
+
+          gh release create dev-latest \
+            ./artifacts/* \
+            --title "Latest Development Build" \
+            --prerelease \
+            --notes "## Latest Development Build
+
+          **Version:** \`$DEV_TAG\`
+          **OTA Version:** \`${{ needs.prepare.outputs.ota_version }}\` (decimal: ${{ needs.prepare.outputs.ota_version_decimal }})
+          **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+          **Built:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          ---
+
+          > **Note**: This release always points to the most recent development build.
+          > For a specific build, see the individual \`dev-<sha>\` releases.
+
+          For stable releases, see the [latest stable release](../../releases/latest).
+
+          ### Downloads
+          | File | Description |
+          |------|-------------|
+          | \`${{ env.FIRMWARE_NAME }}.bin\` | Raw firmware binary for direct flashing |
+          | \`${{ env.FIRMWARE_NAME }}.ota\` | Zigbee OTA update image |
+
+          ### OTA Update URL (Zigbee2MQTT)
+          \`\`\`
+          https://github.com/${{ github.repository }}/releases/download/dev-latest/${{ env.FIRMWARE_NAME }}.ota
+          \`\`\`
+
+          ### Checksums
+          See \`.sha256\` files for SHA256 verification."
+
       - name: Cleanup old dev releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Keep the 5 most recent dev releases, delete the rest
-          # List all releases, filter for dev-* tags, sort by date (newest first)
+          # Keep the 5 most recent dev-<sha> releases, delete the rest
+          # Excludes dev-latest (managed separately)
           gh release list --limit 100 --json tagName,createdAt \
-            --jq '.[] | select(.tagName | startswith("dev-")) | .tagName' \
+            --jq '.[] | select(.tagName | startswith("dev-") and .tagName != "dev-latest") | .tagName' \
             | tail -n +6 \
             | while read -r tag; do
                 echo "Deleting old dev release: $tag"
