@@ -494,3 +494,45 @@ jobs:
           ---
 
           $(gh release view "${{ github.ref_name }}" --json body -q .body 2>/dev/null || echo '')"
+
+      - name: Update OTA index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Add new release to ota-index.json
+          OTA_INDEX="zigbee2mqtt/ota-index.json"
+          TAG="${{ github.ref_name }}"
+          OTA_VERSION=${{ needs.prepare.outputs.ota_version_decimal }}
+
+          # Create new entry
+          NEW_ENTRY=$(cat <<EOF
+          {
+            "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/${{ env.FIRMWARE_NAME }}.ota",
+            "manufacturerCode": 6168,
+            "imageType": 1,
+            "fileVersion": ${OTA_VERSION},
+            "modelId": "Ventair Skyfan/Light ZB Adaptor"
+          }
+          EOF
+          )
+
+          # Read existing index, append new entry, write back
+          # Using jq to properly handle JSON
+          if command -v jq &> /dev/null; then
+            jq --argjson entry "$NEW_ENTRY" '. += [$entry]' "$OTA_INDEX" > tmp.json && mv tmp.json "$OTA_INDEX"
+          else
+            echo "jq not available, installing..."
+            sudo apt-get update && sudo apt-get install -y jq
+            jq --argjson entry "$NEW_ENTRY" '. += [$entry]' "$OTA_INDEX" > tmp.json && mv tmp.json "$OTA_INDEX"
+          fi
+
+          echo "Updated $OTA_INDEX with entry for $TAG"
+          cat "$OTA_INDEX"
+
+      - name: Commit OTA index update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add zigbee2mqtt/ota-index.json
+          git commit -m "chore: add ${{ github.ref_name }} to OTA index" || echo "No changes to commit"
+          git push
