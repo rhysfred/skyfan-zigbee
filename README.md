@@ -239,13 +239,25 @@ ota:
 
 ### Version Numbering
 
-OTA versions use a 32-bit format (0xMMmmppBB):
-- MM: Major version (0-255)
-- mm: Minor version (0-255)
-- pp: Patch version (0-255)
-- BB: Build number (alpha=1-15, beta=17-31, rc=33-47, release=255)
+OTA versions use a 32-bit format: `0xRRRRRDDD`
+- Upper 20 bits (`RRRRR`): Tagged releases (always ≥ 0x00001000)
+- Lower 12 bits (`DDD`): Dev builds (1-4095)
 
-Example: v0.0.4-alpha.1 → 0x00000401 (decimal: 1025)
+**Release encoding** (5 bits each in upper 20 bits):
+- Major: bits 27-31 (0-31)
+- Minor: bits 22-26 (0-31)
+- Patch: bits 17-21 (0-31)
+- Prerelease: bits 12-16 (alpha=1-10, beta=12-21, rc=23-30, stable=31)
+
+**Examples**:
+| Version | Hex | Decimal |
+|---------|-----|---------|
+| dev build 50 | 0x00000032 | 50 |
+| v0.0.4-alpha.1 | 0x00081000 | 528,384 |
+| v0.0.4 | 0x0008F000 | 585,728 |
+| v1.0.0 | 0x0800F000 | 134,279,168 |
+
+This ensures all releases are always seen as upgrades from dev builds.
 
 ### Adding New Releases to OTA Index
 
@@ -256,7 +268,7 @@ When creating a new release, add an entry to `zigbee2mqtt/ota-index.json`:
   "url": "https://github.com/rhysfred/skyfan-zigbee/releases/download/v0.0.5/skyfan-zigbee.ota",
   "manufacturerCode": 6168,
   "imageType": 1,
-  "fileVersion": 1535,
+  "fileVersion": 593920,
   "modelId": "Ventair Skyfan/Light ZB Adaptor"
 }
 ```

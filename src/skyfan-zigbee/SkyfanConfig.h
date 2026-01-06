@@ -31,10 +31,17 @@
 #endif
 
 // === OTA Configuration ===
-// OTA file version: Injected by CI as 0xMMmmppBB (major.minor.patch.build)
-// Pre-release encoding: alpha.N=N, beta.N=16+N, rc.N=32+N, release=255
+// OTA file version format: 0xRRRRRDDD (32-bit)
+//   - Upper 20 bits (RRRRR): Tagged releases (>= 0x00001000)
+//   - Lower 12 bits (DDD): Dev builds (1-4095)
+//
+// Release encoding (5 bits each in upper 20 bits):
+//   - Major: bits 27-31 (0-31), Minor: bits 22-26 (0-31)
+//   - Patch: bits 17-21 (0-31), Prerelease: bits 12-16 (alpha=1-10, beta=12-21, rc=23-30, stable=31)
+//
+// Examples: dev build 50 = 0x00000032, v0.0.4-alpha.1 = 0x00081000, v1.0.0 = 0x0800F000
 #ifndef OTA_FILE_VERSION
-#define OTA_FILE_VERSION 0x00000001  // Fallback for local builds
+#define OTA_FILE_VERSION 0x00000001  // Fallback for local builds (dev build 1)
 #endif
 #define OTA_DOWNLOADED_FILE_VERSION OTA_FILE_VERSION  // Initially same as running version
 #define OTA_HW_VERSION              0x0001            // Hardware revision (increment for breaking HW changes)

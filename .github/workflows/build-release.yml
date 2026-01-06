@@ -86,11 +86,21 @@ jobs:
       - name: Determine version string
         id: version
         run: |
-          # Function to convert semver to OTA version hex (0xMMmmppBB)
-          # Pre-release encoding: alpha.N=N, beta.N=16+N, rc.N=32+N, release=255
+          # OTA Version Format: 0xRRRRRDDD (32-bit)
+          #   - Upper 20 bits (RRRRR): Tagged releases (always >= 0x00001000)
+          #   - Lower 12 bits (DDD): Dev builds (1-4095)
+          #
+          # Release encoding (5 bits each, shifted into upper 20 bits):
+          #   - Major: bits 27-31 (0-31)
+          #   - Minor: bits 22-26 (0-31)
+          #   - Patch: bits 17-21 (0-31)
+          #   - Prerelease: bits 12-16 (alpha=1-10, beta=12-21, rc=23-30, stable=31)
+          #
+          # This ensures all releases (>= 0x00001000) are always higher than dev builds (< 0x1000)
+
           convert_to_ota_version() {
             local tag="$1"
-            local major=0 minor=0 patch=0 build=255
+            local major=0 minor=0 patch=0 prerelease=31  # 31 = stable
 
             # Strip 'v' prefix if present
             tag="${tag#v}"
@@ -104,19 +114,26 @@ jobs:
               prerelease_num="${BASH_REMATCH[5]}"
 
               case "$prerelease_type" in
-                alpha) build=$prerelease_num ;;           # 1-15
-                beta)  build=$((16 + prerelease_num)) ;;  # 17-31
-                rc)    build=$((32 + prerelease_num)) ;;  # 33-47
+                alpha) prerelease=$prerelease_num ;;              # 1-10
+                beta)  prerelease=$((11 + prerelease_num)) ;;     # 12-21
+                rc)    prerelease=$((22 + prerelease_num)) ;;     # 23-30
               esac
             elif [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
               major="${BASH_REMATCH[1]}"
               minor="${BASH_REMATCH[2]}"
               patch="${BASH_REMATCH[3]}"
-              build=255  # Stable release
+              prerelease=31  # Stable release
             fi
 
-            # Calculate hex value: (major << 24) | (minor << 16) | (patch << 8) | build
-            printf "0x%02X%02X%02X%02X" "$major" "$minor" "$patch" "$build"
+            # Clamp values to 5 bits (0-31)
+            major=$((major & 0x1F))
+            minor=$((minor & 0x1F))
+            patch=$((patch & 0x1F))
+            prerelease=$((prerelease & 0x1F))
+
+            # Calculate: (major << 27) | (minor << 22) | (patch << 17) | (prerelease << 12)
+            local version=$(( (major << 27) | (minor << 22) | (patch << 17) | (prerelease << 12) ))
+            printf "0x%08X" "$version"
           }
 
           if [[ "${{ steps.context.outputs.is_dev }}" == "true" ]]; then
@@ -124,12 +141,14 @@ jobs:
             SHORT_SHA=$(git rev-parse --short=7 HEAD)
             VERSION="dev-${SHORT_SHA}"
 
-            # Dev builds use commit count as build number for incrementing versions
+            # Dev builds use lower 12 bits (commit count % 4096)
             COMMIT_COUNT=$(git rev-list --count HEAD)
-            # Use 0.0.0 with commit count as build (wraps at 255)
-            BUILD_NUM=$((COMMIT_COUNT % 256))
-            OTA_VERSION=$(printf "0x%02X%02X%02X%02X" 0 0 0 "$BUILD_NUM")
-            OTA_VERSION_DECIMAL=$((BUILD_NUM))
+            OTA_VERSION_DECIMAL=$((COMMIT_COUNT % 4096))
+            # Ensure at least 1 (0 would mean "no version")
+            if [[ $OTA_VERSION_DECIMAL -eq 0 ]]; then
+              OTA_VERSION_DECIMAL=1
+            fi
+            OTA_VERSION=$(printf "0x%08X" "$OTA_VERSION_DECIMAL")
 
             echo "Version: $VERSION"
             echo "OTA Version: $OTA_VERSION (decimal: $OTA_VERSION_DECIMAL)"
@@ -311,27 +330,20 @@ jobs:
           name: firmware-${{ needs.prepare.outputs.version }}
           path: ./artifacts
 
-      - name: Delete existing dev-latest release
+      - name: Create dev release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Delete existing release if it exists (ignore errors if not found)
-          gh release delete dev-latest --yes 2>/dev/null || true
+          # Use version string (dev-<sha>) as the release tag
+          DEV_TAG="${{ needs.prepare.outputs.version }}"
 
-          # Delete the tag if it exists (for clean recreation)
-          git push --delete origin dev-latest 2>/dev/null || true
-
-      - name: Create dev-latest release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create dev-latest \
+          gh release create "$DEV_TAG" \
             ./artifacts/* \
-            --title "Development Build (${{ needs.prepare.outputs.version }})" \
+            --title "Development Build ($DEV_TAG)" \
             --prerelease \
             --notes "## Development Build
 
-          **Version:** \`${{ needs.prepare.outputs.version }}\`
+          **Version:** \`$DEV_TAG\`
           **OTA Version:** \`${{ needs.prepare.outputs.ota_version }}\` (decimal: ${{ needs.prepare.outputs.ota_version_decimal }})
           **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
           **Built:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -351,11 +363,25 @@ jobs:
 
           ### OTA Update URL (Zigbee2MQTT)
           \`\`\`
-          https://github.com/${{ github.repository }}/releases/download/dev-latest/${{ env.FIRMWARE_NAME }}.ota
+          https://github.com/${{ github.repository }}/releases/download/$DEV_TAG/${{ env.FIRMWARE_NAME }}.ota
           \`\`\`
 
           ### Checksums
           See \`.sha256\` files for SHA256 verification."
+
+      - name: Cleanup old dev releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Keep the 5 most recent dev releases, delete the rest
+          # List all releases, filter for dev-* tags, sort by date (newest first)
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '.[] | select(.tagName | startswith("dev-")) | .tagName' \
+            | tail -n +6 \
+            | while read -r tag; do
+                echo "Deleting old dev release: $tag"
+                gh release delete "$tag" --yes --cleanup-tag || true
+              done
 
   # ==========================================================================
   # Release Formal: Create immutable versioned release
