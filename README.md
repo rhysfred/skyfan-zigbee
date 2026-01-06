@@ -6,7 +6,7 @@ A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting
 
 This project implements a Zigbee interface for Ventair Skyfan ceiling fans that use Tuya MCU controllers. It provides bidirectional communication between the Zigbee network and the fan's MCU, enabling control and status reporting for both fan and integrated lighting functions.
 
-Note, this is very much work in progress. HW integration is not yet tested, waiting on PCB to do so. Should you try this? Probably not just yet.
+**Status**: Active development. Hardware integration testing in progress. Should you try this? Probably not just yet.
 
 ## Features
 
@@ -83,6 +83,9 @@ graph TD
 
 ```
 skyfan-zigbee/
+├── .github/
+│   └── workflows/
+│       └── build-release.yml      # CI/CD workflow for automated builds and releases
 ├── src/
 │   └── skyfan-zigbee/
 │       ├── skyfan-zigbee.ino      # Main Arduino sketch with Zigbee endpoints and callbacks
@@ -97,7 +100,8 @@ skyfan-zigbee/
 │       └── ButtonHandler.cpp      # Non-blocking button handler implementation
 ├── zigbee2mqtt/
 │   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
-│   └── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
+│   ├── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
+│   └── ota-index.json             # OTA firmware index for Zigbee2MQTT (auto-updated on release)
 ├── electronics/
 │   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
 │   └── README.md                  # Electronics design documentation
@@ -231,7 +235,7 @@ ota:
 
 ### Update Process
 
-1. When a new firmware version is released, update the `zigbee2mqtt/ota-index.json` with the new release information
+1. New firmware releases automatically update `zigbee2mqtt/ota-index.json` via CI/CD
 2. Zigbee2MQTT will detect the available update when it checks the index
 3. Trigger the update through the Zigbee2MQTT frontend or API
 4. The device LED will blink during the update process
@@ -259,9 +263,9 @@ OTA versions use a 32-bit format: `0xRRRRRDDD`
 
 This ensures all releases are always seen as upgrades from dev builds.
 
-### Adding New Releases to OTA Index
+### OTA Index
 
-When creating a new release, add an entry to `zigbee2mqtt/ota-index.json`:
+The `zigbee2mqtt/ota-index.json` file is automatically updated when formal releases are created. Each entry contains:
 
 ```json
 {
@@ -272,6 +276,39 @@ When creating a new release, add an entry to `zigbee2mqtt/ota-index.json`:
   "modelId": "Ventair Skyfan/Light ZB Adaptor"
 }
 ```
+
+The `fileVersion` is calculated from the semantic version using the OTA version format described above.
+
+## CI/CD
+
+The project uses GitHub Actions for automated builds and releases.
+
+### Build Triggers
+
+- **Push to main**: Creates rolling `dev-<sha>` releases plus updates `dev-latest`
+- **Version tags** (`v*`): Creates formal releases (stable or pre-release)
+
+### Release Types
+
+| Tag Format | Type | Example |
+|------------|------|---------|
+| `v1.0.0` | Stable release | Production-ready |
+| `v1.0.0-alpha.N` | Alpha pre-release | Early testing |
+| `v1.0.0-beta.N` | Beta pre-release | Feature complete |
+| `v1.0.0-rc.N` | Release candidate | Final testing |
+| `dev-<sha>` | Development build | Latest main branch |
+
+### Build Artifacts
+
+Each build produces:
+- `skyfan-zigbee.bin` - Raw firmware binary for direct flashing
+- `skyfan-zigbee.ota` - Zigbee OTA update image
+- `firmware-info.json` - Build metadata
+- SHA256 checksums for verification
+
+### Development Builds
+
+The last 5 development builds are retained, plus `dev-latest` always points to the most recent. Debug logging is enabled in dev builds.
 
 ## Troubleshooting
 

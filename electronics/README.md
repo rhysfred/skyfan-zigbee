@@ -5,18 +5,20 @@ This directory contains the electronic design files for the Skyfan Zigbee Contro
 ## Directory Structure
 
 ### Design Files
-- **SkyFanController.sch** - Eagle schematic file with circuit diagrams
-- **SkyFanController.brd** - Eagle PCB layout file with component placement and routing
+- **SkyFanController.sch** - Schematic file with circuit diagrams
+- **SkyFanController.brd** - PCB layout file with component placement and routing
+- **SkyfanController.f3z** - Fusion 360 Electronics archive (complete project backup)
 
 ### Manufacturing Files
 - **gerber/** - Complete manufacturing file set for PCB production
   - **GerberFiles/** - Gerber layer files (copper, soldermask, silkscreen, profile)
   - **DrillFiles/** - Excellon drill files for holes and vias
   - **Assembly/** - Pick and place files for automated assembly
+  - **SkyfanController.zip** - All manufacturing files packaged for PCB fab houses
 
 ## Design Tools
 
-The design files are in **Autodesk Eagle** format (.sch/.brd/.fz3 files).
+The design files are in **Autodesk Fusion 360 Electronics** format. The `.sch` and `.brd` files use Eagle format (compatible with standalone Eagle) while the `.f3z` file is a Fusion 360 archive containing the complete project.
 
 ## Hardware Specifications
 
