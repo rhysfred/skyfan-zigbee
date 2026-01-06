@@ -534,12 +534,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Save the modified ota-index.json before switching branches
+          cp zigbee2mqtt/ota-index.json /tmp/ota-index.json
+
           # Fetch and checkout main branch (tag checkout leaves us in detached HEAD)
           git fetch origin main
           git checkout main
 
-          # Re-apply the ota-index.json change from the detached HEAD
-          git checkout HEAD@{1} -- zigbee2mqtt/ota-index.json
+          # Restore the modified ota-index.json
+          cp /tmp/ota-index.json zigbee2mqtt/ota-index.json
 
           git add zigbee2mqtt/ota-index.json
           # [skip ci] prevents this commit from triggering another workflow run
