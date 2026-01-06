@@ -533,6 +533,15 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch and checkout main branch (tag checkout leaves us in detached HEAD)
+          git fetch origin main
+          git checkout main
+
+          # Re-apply the ota-index.json change from the detached HEAD
+          git checkout HEAD@{1} -- zigbee2mqtt/ota-index.json
+
           git add zigbee2mqtt/ota-index.json
-          git commit -m "chore: add ${{ github.ref_name }} to OTA index" || echo "No changes to commit"
-          git push
+          # [skip ci] prevents this commit from triggering another workflow run
+          git commit -m "chore: add ${{ github.ref_name }} to OTA index [skip ci]" || echo "No changes to commit"
+          git push origin main
