@@ -30,6 +30,17 @@
 #define FIRMWARE_VERSION "dev-local"
 #endif
 
+// === OTA Configuration ===
+// OTA file version: Injected by CI as 0xMMmmppBB (major.minor.patch.build)
+// Pre-release encoding: alpha.N=N, beta.N=16+N, rc.N=32+N, release=255
+#ifndef OTA_FILE_VERSION
+#define OTA_FILE_VERSION 0x00000001  // Fallback for local builds
+#endif
+#define OTA_DOWNLOADED_FILE_VERSION OTA_FILE_VERSION  // Initially same as running version
+#define OTA_HW_VERSION              0x0001            // Hardware revision (increment for breaking HW changes)
+#define OTA_MANUFACTURER_CODE       0x1818                 // Front Left Speaker (same as FLS_MANUFACTURER_CODE)
+#define OTA_IMAGE_TYPE              0x0001            // Image type identifier
+
 // === Hardware Configuration ===
 #define FACTORY_RESET_BUTTON_PIN   BOOT_PIN
 #define DEBUG_SERIAL_RX_PIN        21

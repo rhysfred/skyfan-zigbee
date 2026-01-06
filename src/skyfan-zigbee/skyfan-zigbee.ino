@@ -55,6 +55,9 @@ uint8_t lastConfirmedLightBrightness = 127;  // Default: middle brightness (0-25
 uint16_t lastConfirmedLightColorTemp = COLOUR_TEMP_WARM_MIRED;  // Default: warm
 #endif
 
+// OTA state tracking
+volatile bool otaRunning = false;
+
 // USB Serial (Serial) is used for debug output
 
 /********************* fan control callback functions **************************/
@@ -391,6 +394,17 @@ void onCommandRollback(CommandType type) {
   }
 }
 
+/********************* OTA callback functions **************************/
+void otaStateCallback(bool otaActive) {
+  otaRunning = otaActive;
+  if (otaActive) {
+    Serial.println("OTA update started - do not power off device");
+    statusLed.setStatus(LedStatus::INITIALISING);  // Use blinking LED during OTA
+  } else {
+    Serial.println("OTA update finished - device will reboot");
+  }
+}
+
 /********************* Arduino functions **************************/
 void setup() {
   Serial.begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
@@ -436,6 +450,16 @@ void setup() {
     ESP.restart();
   }
 
+  // Add OTA client to fan endpoint for over-the-air firmware updates
+  if (zbFanControl.addOTAClient(OTA_FILE_VERSION, OTA_DOWNLOADED_FILE_VERSION, OTA_HW_VERSION,
+                                 OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE)) {
+    Serial.printf("OTA client added (version: 0x%08lX, manufacturer: 0x%04X, image type: 0x%04X)\n",
+                  (unsigned long)OTA_FILE_VERSION, OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE);
+    zbFanControl.onOTAStateChange(otaStateCallback);
+  } else {
+    Serial.println("Warning: Failed to add OTA client - OTA updates will not be available");
+  }
+
   //Add endpoints to Zigbee Core
   Serial.println("Adding ZigbeeFanControl endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbFanControl);
@@ -469,6 +493,10 @@ void setup() {
   }
   Serial.println();
   Serial.println("Zigbee connected successfully!");
+
+  // Start OTA client query - first request is within a minute, then hourly automatically
+  zbFanControl.requestOTAUpdate();
+  Serial.println("OTA update check scheduled");
 }
 
 void loop() {
@@ -485,13 +513,17 @@ void loop() {
   updateLedStatus();
   statusLed.update();
   
-  // Check for factory reset long press
+  // Check for factory reset long press (blocked during OTA)
   if (factoryResetButton.wasLongPressed()) {
-    Serial.println("Resetting Zigbee to factory and rebooting in 1s.");
-    // Clean up allocated resources before factory reset
-    cleanupAllResources();
-    delay(FACTORY_RESET_DELAY_MS);
-    Zigbee.factoryReset();
+    if (otaRunning) {
+      Serial.println("OTA in progress - factory reset blocked");
+    } else {
+      Serial.println("Resetting Zigbee to factory and rebooting in 1s.");
+      // Clean up allocated resources before factory reset
+      cleanupAllResources();
+      delay(FACTORY_RESET_DELAY_MS);
+      Zigbee.factoryReset();
+    }
   }
 }
 

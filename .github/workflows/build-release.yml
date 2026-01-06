@@ -43,6 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      ota_version: ${{ steps.version.outputs.ota_version }}
+      ota_version_decimal: ${{ steps.version.outputs.ota_version_decimal }}
       is_release: ${{ steps.context.outputs.is_release }}
       is_prerelease: ${{ steps.context.outputs.is_prerelease }}
       is_dev: ${{ steps.context.outputs.is_dev }}
@@ -84,18 +86,67 @@ jobs:
       - name: Determine version string
         id: version
         run: |
+          # Function to convert semver to OTA version hex (0xMMmmppBB)
+          # Pre-release encoding: alpha.N=N, beta.N=16+N, rc.N=32+N, release=255
+          convert_to_ota_version() {
+            local tag="$1"
+            local major=0 minor=0 patch=0 build=255
+
+            # Strip 'v' prefix if present
+            tag="${tag#v}"
+
+            # Check for pre-release suffix
+            if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-(alpha|beta|rc)\.([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              prerelease_type="${BASH_REMATCH[4]}"
+              prerelease_num="${BASH_REMATCH[5]}"
+
+              case "$prerelease_type" in
+                alpha) build=$prerelease_num ;;           # 1-15
+                beta)  build=$((16 + prerelease_num)) ;;  # 17-31
+                rc)    build=$((32 + prerelease_num)) ;;  # 33-47
+              esac
+            elif [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              build=255  # Stable release
+            fi
+
+            # Calculate hex value: (major << 24) | (minor << 16) | (patch << 8) | build
+            printf "0x%02X%02X%02X%02X" "$major" "$minor" "$patch" "$build"
+          }
+
           if [[ "${{ steps.context.outputs.is_dev }}" == "true" ]]; then
             # Development build: dev-<short_sha>
             SHORT_SHA=$(git rev-parse --short=7 HEAD)
             VERSION="dev-${SHORT_SHA}"
+
+            # Dev builds use commit count as build number for incrementing versions
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            # Use 0.0.0 with commit count as build (wraps at 255)
+            BUILD_NUM=$((COMMIT_COUNT % 256))
+            OTA_VERSION=$(printf "0x%02X%02X%02X%02X" 0 0 0 "$BUILD_NUM")
+            OTA_VERSION_DECIMAL=$((BUILD_NUM))
+
             echo "Version: $VERSION"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "OTA Version: $OTA_VERSION (decimal: $OTA_VERSION_DECIMAL)"
           else
             # Tag-based release: use the tag name
             VERSION="${{ github.ref_name }}"
+            OTA_VERSION=$(convert_to_ota_version "$VERSION")
+            # Convert hex to decimal for image builder tool
+            OTA_VERSION_DECIMAL=$((OTA_VERSION))
+
             echo "Version: $VERSION"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "OTA Version: $OTA_VERSION (decimal: $OTA_VERSION_DECIMAL)"
           fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "ota_version=$OTA_VERSION" >> $GITHUB_OUTPUT
+          echo "ota_version_decimal=$OTA_VERSION_DECIMAL" >> $GITHUB_OUTPUT
 
   # ==========================================================================
   # Build: Compile firmware with arduino-cli
@@ -130,13 +181,14 @@ jobs:
       - name: Compile firmware
         run: |
           echo "Compiling firmware version: ${{ needs.prepare.outputs.version }}"
+          echo "OTA version: ${{ needs.prepare.outputs.ota_version }}"
 
           # Dev builds include debug logging; release builds do not
           if [[ "${{ needs.prepare.outputs.is_dev }}" == "true" ]]; then
-            EXTRA_FLAGS="-DWITH_LIGHT -D__DEBUG__ -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\""
+            EXTRA_FLAGS="-DWITH_LIGHT -D__DEBUG__ -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
             echo "Dev build: Debug logging ENABLED"
           else
-            EXTRA_FLAGS="-DWITH_LIGHT -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\""
+            EXTRA_FLAGS="-DWITH_LIGHT -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
             echo "Release build: Debug logging DISABLED"
           fi
 
@@ -177,19 +229,57 @@ jobs:
           cat > firmware-info.json << EOF
           {
             "version": "${{ needs.prepare.outputs.version }}",
+            "ota_version": "${{ needs.prepare.outputs.ota_version }}",
+            "ota_version_decimal": ${{ needs.prepare.outputs.ota_version_decimal }},
             "filename": "${{ env.FIRMWARE_NAME }}.bin",
+            "ota_filename": "${{ env.FIRMWARE_NAME }}.ota",
             "sha256": "$(cat ${{ env.FIRMWARE_NAME }}.bin.sha256 | cut -d' ' -f1)",
             "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "commit": "${{ github.sha }}",
             "is_prerelease": ${{ needs.prepare.outputs.is_prerelease }},
             "is_dev": ${{ needs.prepare.outputs.is_dev }},
             "debug_enabled": ${{ needs.prepare.outputs.is_dev }},
-            "board": "${{ env.BOARD_FQBN }}"
+            "board": "${{ env.BOARD_FQBN }}",
+            "manufacturer_code": 6168,
+            "image_type": 1
           }
           EOF
 
           echo "Artifacts prepared:"
           ls -la
+
+      - name: Create OTA image
+        run: |
+          cd ./artifacts
+
+          # Download the image builder tool from esp-zigbee-sdk
+          curl -sL -o image_builder_tool.py \
+            "https://raw.githubusercontent.com/espressif/esp-zigbee-sdk/main/tools/image_builder_tool/image_builder_tool.py"
+
+          # Create OTA image file
+          # --create: input binary file
+          # --version: OTA file version (decimal)
+          # --manuf-id: manufacturer code (0x1818 = 6168)
+          # --image-type: image type identifier (0x0001 = 1)
+          # -o: output OTA file
+          python3 image_builder_tool.py \
+            --create "${{ env.FIRMWARE_NAME }}.bin" \
+            --version ${{ needs.prepare.outputs.ota_version_decimal }} \
+            --manuf-id 6168 \
+            --image-type 1 \
+            -o "${{ env.FIRMWARE_NAME }}.ota"
+
+          # Verify OTA file was created
+          if [[ ! -f "${{ env.FIRMWARE_NAME }}.ota" ]]; then
+            echo "::error::Failed to create OTA image"
+            exit 1
+          fi
+
+          # Generate OTA checksum
+          sha256sum "${{ env.FIRMWARE_NAME }}.ota" > "${{ env.FIRMWARE_NAME }}.ota.sha256"
+
+          echo "OTA image created:"
+          ls -la *.ota*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -239,6 +329,7 @@ jobs:
             --notes "## Development Build
 
           **Version:** \`${{ needs.prepare.outputs.version }}\`
+          **OTA Version:** \`${{ needs.prepare.outputs.ota_version }}\` (decimal: ${{ needs.prepare.outputs.ota_version_decimal }})
           **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
           **Built:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -249,13 +340,19 @@ jobs:
 
           For stable releases, see the [latest stable release](../../releases/latest).
 
-          ### OTA Update URL
+          ### Downloads
+          | File | Description |
+          |------|-------------|
+          | \`${{ env.FIRMWARE_NAME }}.bin\` | Raw firmware binary for direct flashing |
+          | \`${{ env.FIRMWARE_NAME }}.ota\` | Zigbee OTA update image |
+
+          ### OTA Update URL (Zigbee2MQTT)
           \`\`\`
-          https://github.com/${{ github.repository }}/releases/download/dev-latest/${{ env.FIRMWARE_NAME }}.bin
+          https://github.com/${{ github.repository }}/releases/download/dev-latest/${{ env.FIRMWARE_NAME }}.ota
           \`\`\`
 
           ### Checksums
-          See \`${{ env.FIRMWARE_NAME }}.bin.sha256\` for SHA256 verification."
+          See \`.sha256\` files for SHA256 verification."
 
   # ==========================================================================
   # Release Formal: Create immutable versioned release
@@ -301,17 +398,27 @@ jobs:
 
           $STABILITY_MSG
 
+          **OTA Version:** \`${{ needs.prepare.outputs.ota_version }}\` (decimal: ${{ needs.prepare.outputs.ota_version_decimal }})
+
           ### Installation
 
-          Download \`${{ env.FIRMWARE_NAME }}.bin\` and flash to your ESP32-C6 device.
+          **Direct Flash:** Download \`${{ env.FIRMWARE_NAME }}.bin\` and flash to your ESP32-C6 device.
 
-          ### OTA Update URL
+          **OTA Update:** Use Zigbee2MQTT or your coordinator to update via the \`.ota\` file.
+
+          ### Downloads
+          | File | Description |
+          |------|-------------|
+          | \`${{ env.FIRMWARE_NAME }}.bin\` | Raw firmware binary for direct flashing |
+          | \`${{ env.FIRMWARE_NAME }}.ota\` | Zigbee OTA update image |
+
+          ### OTA Update URL (Zigbee2MQTT)
           \`\`\`
-          https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.FIRMWARE_NAME }}.bin
+          https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.FIRMWARE_NAME }}.ota
           \`\`\`
 
           ### Checksums
-          See \`${{ env.FIRMWARE_NAME }}.bin.sha256\` for SHA256 verification.
+          See \`.sha256\` files for SHA256 verification.
 
           ---
 

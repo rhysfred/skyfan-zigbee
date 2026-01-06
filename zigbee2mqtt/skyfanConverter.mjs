@@ -3,6 +3,7 @@ import * as m from "zigbee-herdsman-converters/lib/modernExtend";
 import * as reporting from "zigbee-herdsman-converters/lib/reporting";
 import * as fz from "zigbee-herdsman-converters/converters/fromZigbee";
 import * as tz from "zigbee-herdsman-converters/converters/toZigbee";
+import * as ota from "zigbee-herdsman-converters/lib/ota";
 import {Zcl} from "zigbee-herdsman";
 
 const e = presets;
@@ -100,4 +101,10 @@ export default {
             logger.warn("Failed to configure custom fan direction reporting", error);
         }
     },
+
+    // OTA updates from GitHub releases
+    // User must add the following to their Zigbee2MQTT configuration.yaml:
+    // ota:
+    //   zigbee_ota_override_index_location: https://raw.githubusercontent.com/rhysfred/skyfan-zigbee/main/zigbee2mqtt/ota-index.json
+    ota: ota.zigbeeOTA,
 };

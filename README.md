@@ -37,6 +37,11 @@ Note, this is very much work in progress. HW integration is not yet tested, wait
 - **Command Feedback**: LED flashes for 50ms on Zigbee commands with 15ms off period for overlapping commands
 - **Factory Reset**: Hold BOOT button for 3+ seconds to reset Zigbee settings
 
+### OTA Updates
+- **Zigbee OTA**: Firmware updates over Zigbee via Zigbee2MQTT
+- **Automatic Checks**: Device queries for updates hourly after joining network
+- **Safe Updates**: Factory reset is blocked during OTA to prevent corruption
+
 ## Hardware Requirements
 
 - **ESP32-C6** or compatible ESP32 with Zigbee support
@@ -210,6 +215,51 @@ Before compiling, configure the target device type in `SkyfanConfig.h`:
 - **Heartbeat**: 10-second intervals
 - **Timeout**: 1-second response timeout
 - **Buffer Size**: 256 bytes for frame processing
+
+## OTA Updates
+
+The device supports over-the-air firmware updates via Zigbee. Updates are delivered through Zigbee2MQTT using the standard Zigbee OTA cluster.
+
+### Zigbee2MQTT Configuration
+
+To enable OTA updates, add the following to your Zigbee2MQTT `configuration.yaml`:
+
+```yaml
+ota:
+  zigbee_ota_override_index_location: https://raw.githubusercontent.com/rhysfred/skyfan-zigbee/main/zigbee2mqtt/ota-index.json
+```
+
+### Update Process
+
+1. When a new firmware version is released, update the `zigbee2mqtt/ota-index.json` with the new release information
+2. Zigbee2MQTT will detect the available update when it checks the index
+3. Trigger the update through the Zigbee2MQTT frontend or API
+4. The device LED will blink during the update process
+5. Device reboots automatically after successful update
+
+### Version Numbering
+
+OTA versions use a 32-bit format (0xMMmmppBB):
+- MM: Major version (0-255)
+- mm: Minor version (0-255)
+- pp: Patch version (0-255)
+- BB: Build number (alpha=1-15, beta=17-31, rc=33-47, release=255)
+
+Example: v0.0.4-alpha.1 → 0x00000401 (decimal: 1025)
+
+### Adding New Releases to OTA Index
+
+When creating a new release, add an entry to `zigbee2mqtt/ota-index.json`:
+
+```json
+{
+  "url": "https://github.com/rhysfred/skyfan-zigbee/releases/download/v0.0.5/skyfan-zigbee.ota",
+  "manufacturerCode": 6168,
+  "imageType": 1,
+  "fileVersion": 1535,
+  "modelId": "Ventair Skyfan/Light ZB Adaptor"
+}
+```
 
 ## Troubleshooting
 
