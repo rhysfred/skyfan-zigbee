@@ -223,8 +223,8 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          # Find the compiled binary (name varies by arduino-cli version)
-          BIN_FILE=$(find ./build -name "*.ino.bin" -o -name "*.bin" | head -1)
+          # Find the main firmware binary (exclude bootloader and partitions)
+          BIN_FILE=$(find ./build -name "*.ino.bin" ! -name "*bootloader*" ! -name "*partitions*" | head -1)
 
           if [[ -z "$BIN_FILE" ]]; then
             echo "::error::No binary file found in build output"
@@ -232,7 +232,15 @@ jobs:
             exit 1
           fi
 
-          echo "Found binary: $BIN_FILE"
+          # Verify it's the main firmware (should be > 100KB)
+          FILE_SIZE=$(stat -c%s "$BIN_FILE" 2>/dev/null || stat -f%z "$BIN_FILE")
+          if [[ $FILE_SIZE -lt 100000 ]]; then
+            echo "::error::Binary file too small ($FILE_SIZE bytes) - expected main firmware"
+            ls -la ./build/
+            exit 1
+          fi
+
+          echo "Found binary: $BIN_FILE ($FILE_SIZE bytes)"
 
           # Create artifacts directory
           mkdir -p ./artifacts
