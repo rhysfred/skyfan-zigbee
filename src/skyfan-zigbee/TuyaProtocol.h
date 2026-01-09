@@ -87,17 +87,21 @@ private:
   bool tuyaConnected;
   void (*deviceStatusCallback)(uint8_t dpid, uint32_t value);
   HardwareSerial* serial;
-  
+
   // Internal state for response processing
   TuyaProtocolState rxState;
   uint8_t rxBuffer[TUYA_RX_BUFFER_SIZE];
   uint16_t rxIndex;
   uint16_t expectedLen;
   uint8_t currentCmd;
-  
+
   // Command tracking for two-phase confirmation
   PendingCommand pendingCommands[MAX_PENDING_COMMANDS];
   void (*rollbackCallback)(CommandType type);
+
+  // MCU responsiveness tracking - when ACK timeout occurs, bypass Tuya for 2s
+  bool mcuNotResponding;
+  unsigned long mcuNotRespondingSince;
 
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
@@ -107,7 +111,7 @@ public:
   
   // Core protocol functions
   void sendCommand(uint8_t cmd, uint8_t* data, uint16_t len);
-  void sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value);
+  bool sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value);  // Returns true if ACK received
   void sendHeartbeat();
   void sendNetworkStatus(uint8_t status);
   void sendProductInfo();
@@ -126,6 +130,7 @@ public:
   
   // Status functions
   bool isConnected() const;
+  bool isMcuResponding();  // Returns false if MCU ACK timed out recently (within 2s)
   void processResponse(bool zigbeeConnected);
   void setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value));
   void setRollbackCallback(void (*callback)(CommandType type));

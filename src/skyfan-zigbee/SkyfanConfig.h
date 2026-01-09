@@ -78,6 +78,7 @@
 #define TUYA_RESPONSE_TIMEOUT_MS       1000   // 1 second
 #define TUYA_COMMAND_TIMEOUT_MS        500    // 0.5 seconds - ACK timeout
 #define TUYA_STATUS_RESPONSE_TIMEOUT_MS 1500  // 1.5 seconds - Status report timeout per Tuya spec
+#define MCU_NOT_RESPONDING_BYPASS_MS   2000   // 2 seconds - bypass Tuya after ACK timeout
 #define ZIGBEE_CONNECTION_POLL_MS      100    // 100ms
 #define FACTORY_RESET_DELAY_MS         1000   // 1 second
 

@@ -73,10 +73,14 @@ public:
   
   // Check if custom cluster is registered
   bool isCustomClusterRegistered() const;
-  
+
   // Clean up custom cluster resources
   void cleanupCustomCluster();
-  
+
+  // Report attribute values to coordinator
+  bool reportFanMode();
+  bool reportFanDirection();
+
 };
 
 #endif // SKYFAN_ZIGBEE_H
