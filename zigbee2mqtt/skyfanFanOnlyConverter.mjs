@@ -8,22 +8,12 @@ import {Zcl} from "zigbee-herdsman";
 
 const e = presets;
 
-// Made-up manufacturer options for Front Left Speaker
-const manufacturerOptions = {manufacturerCode: 0x1818};
+// Front Left Speaker manufacturer-specific constants
+const FLS_MANUFACTURER_CODE = 0x1818;
+const CUSTOM_CLUSTER_ID = 0xFC00;
+const FAN_DIRECTION_ATTR_ID = 0x0001;
 
-// Manufacturer-specific cluster for fan extensions
-m.deviceAddCustomCluster("fanExtensions", {
-    ID: 0xFC00,
-    manufacturerCode: 0x1818,
-    attributes: {
-        fanDirection: {
-            ID: 0x0001,
-            type: Zcl.DataType.UINT8,
-            write: true,
-            read: true
-        }
-    }
-});
+const manufacturerOptions = {manufacturerCode: FLS_MANUFACTURER_CODE};
 
 // Custom converters for fan direction manufacturer-specific cluster attribute
 const fzLocal = {
@@ -59,6 +49,18 @@ export default {
     vendor: "Front Left Speaker",
     description: "Ventair Skyfan ceiling fan controller (fan only)",
     extend: [
+        m.deviceAddCustomCluster("fanExtensions", {
+            ID: CUSTOM_CLUSTER_ID,
+            manufacturerCode: FLS_MANUFACTURER_CODE,
+            attributes: {
+                fanDirection: {
+                    ID: FAN_DIRECTION_ATTR_ID,
+                    type: Zcl.DataType.ENUM8,
+                },
+            },
+            commands: {},
+            commandsResponse: {},
+        }),
         m.deviceEndpoints({
             endpoints: {
                 fan: 1,
@@ -66,7 +68,7 @@ export default {
         }),
     ],
     exposes: [
-        e.fan().withState().withModes(["off", "low", "medium", "high"]).withEndpoint("fan"),
+        e.fan().withModes(["off", "low", "medium", "high"]).withEndpoint("fan"),
         e.enum("fan_direction", access.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction").withEndpoint("fan"),
     ],
 
@@ -74,12 +76,18 @@ export default {
     fromZigbee: [fz.fan, fzLocal.fan_direction],
     toZigbee: [tz.fan_mode, tzLocal.fan_direction],
 
-    configure: async (device, coordinatorEndpoint, logger) => {
+    configure: async (device, coordinatorEndpoint) => {
         const fanEndpoint = device.getEndpoint(1);
 
         // Bind fan clusters only
         await reporting.bind(fanEndpoint, coordinatorEndpoint, ["hvacFanCtrl", "fanExtensions"]);
-        await reporting.fanMode(fanEndpoint);
+
+        // Configure fan mode reporting (requires firmware with reporting enabled)
+        try {
+            await reporting.fanMode(fanEndpoint);
+        } catch {
+            // Fan mode reporting not supported, using binding only
+        }
 
         // Configure custom cluster attribute reporting for direction
         try {
@@ -91,8 +99,8 @@ export default {
                     reportableChange: 1,
                 },
             ]);
-        } catch (error) {
-            logger.warn("Failed to configure custom fan direction reporting", error);
+        } catch {
+            // Fan direction reporting not supported, using binding only
         }
     },
 

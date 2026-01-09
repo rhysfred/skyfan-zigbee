@@ -30,6 +30,7 @@
 class SkyfanZigbeeFanControl : public ZigbeeFanControl {
 private:
   void (*fanDirectionCallback)(uint8_t direction) = nullptr;
+  void (*fanModeCallback)(ZigbeeFanMode mode) = nullptr;  // Store our own ref since parent's is private
   esp_zb_attribute_list_t *customCluster = nullptr;
   bool customClusterRegistered = false;
 
@@ -41,6 +42,9 @@ public:
   
   // Set callback for fan direction changes from Zigbee
   void onFanDirectionChange(void (*callback)(uint8_t direction));
+
+  // Override to capture callback (parent's is private)
+  void onFanModeChange(void (*callback)(ZigbeeFanMode mode));
   
   // Public setter methods for bidirectional status updates
   bool setFanMode(ZigbeeFanMode mode);
@@ -51,12 +55,19 @@ public:
   bool setFanDirection(uint8_t direction);
   uint8_t getFanDirection() const;
   
-  // Create and register manufacturer-specific cluster for fan direction  
+  // Create and register manufacturer-specific cluster for fan direction
   bool createCustomCluster();
+
+  // Enable attribute reporting for fan mode and custom attributes
+  // Must be called before Zigbee.begin()
+  bool enableAttributeReporting();
   
-  // Handle custom cluster attribute changes
+  // Handle custom cluster attribute changes (called internally by zbAttributeSet)
   void handleCustomClusterAttributeChange(uint16_t cluster_id, uint16_t attr_id, uint8_t *data);
-  
+
+  // Override zbAttributeSet to handle custom cluster writes
+  void zbAttributeSet(const esp_zb_zcl_set_attr_value_message_t *message) override;
+
   // Get custom cluster ID for external reference
   uint16_t getCustomClusterId() const;
   

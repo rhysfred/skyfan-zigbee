@@ -58,10 +58,18 @@ uint16_t lastConfirmedLightColorTemp = COLOUR_TEMP_WARM_MIRED;  // Default: warm
 // OTA state tracking
 volatile bool otaRunning = false;
 
+// Rollback state tracking - prevents callback re-triggering during rollback
+bool isRollingBack = false;
+
 // USB Serial (Serial) is used for debug output
 
 /********************* fan control callback functions **************************/
 void setFan(ZigbeeFanMode mode) {
+  // Skip if we're rolling back - prevents infinite loop
+  if (isRollingBack) {
+    return;
+  }
+
   // Zigbee state already updated when this callback is called
 #ifdef __DEBUG__
   debugLogZigbeeMessage("Write", ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, mode);
@@ -100,6 +108,11 @@ void setFan(ZigbeeFanMode mode) {
 
 // Fan direction control callback function
 void setFanDirection(uint8_t direction) {
+  // Skip if we're rolling back - prevents infinite loop
+  if (isRollingBack) {
+    return;
+  }
+
   // Zigbee state already updated when this callback is called
 #ifdef __DEBUG__
   debugLogZigbeeMessage("Write", ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, direction);
@@ -116,6 +129,11 @@ void setFanDirection(uint8_t direction) {
 /********************* light control callback functions **************************/
 #ifdef WITH_LIGHT
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
+  // Skip if we're rolling back - prevents infinite loop
+  if (isRollingBack) {
+    return;
+  }
+
   // Zigbee state already updated when this callback is called
 #ifdef __DEBUG__
   // Note: This callback may receive multiple attribute changes, but we can only log them individually
@@ -124,20 +142,20 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
   debugLogZigbeeMessage("Write", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, colourTempMired);
 #endif
   statusLed.flashCommand();
-  
+
   // Send switch command
   tuya.sendDataPointWithTracking(DP_LIGHT_SWITCH, DP_TYPE_BOOL, on ? 1 : 0, CommandType::LIGHT_SWITCH);
-  
+
   if (on) {
     // Convert Zigbee brightness (0-254) to Tuya brightness (0-5)
     uint8_t tuyaBrightness = zigbeeBrightnessToTuya(level);
     tuya.sendDataPointWithTracking(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness, CommandType::LIGHT_BRIGHTNESS);
-    
+
     // Convert mired to Tuya colour temp values
     ColourTempLevel tuyaColourTemp = miredToTuyaColourTemp(colourTempMired);
     tuya.sendDataPointWithTracking(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp), CommandType::LIGHT_COLOR_TEMP);
   }
-  
+
   Serial.printf("Light: %s, Level: %d, Temp: %d mired (%dK)\n", on ? "ON" : "OFF", level, colourTempMired, miredToKelvin(colourTempMired));
 }
 #endif
@@ -362,36 +380,41 @@ void onDeviceStatus(uint8_t dpid, uint32_t value) {
 // Handle command rollback when ACK or status timeout occurs
 void onCommandRollback(CommandType type) {
   Serial.printf("Rolling back command type %d due to timeout\n", static_cast<int>(type));
-  
+
+  // Set flag to prevent callback re-triggering during rollback
+  isRollingBack = true;
+
   switch (type) {
     case CommandType::FAN_SWITCH:
     case CommandType::FAN_SPEED:
       zbFanControl.setFanMode(lastConfirmedFanMode);
       Serial.printf("Rolled back fan mode to %d\n", lastConfirmedFanMode);
       break;
-      
+
     case CommandType::FAN_DIRECTION:
       zbFanControl.setFanDirection(lastConfirmedFanDirection);
       Serial.printf("Rolled back fan direction to %d\n", lastConfirmedFanDirection);
       break;
-      
+
 #ifdef WITH_LIGHT
     case CommandType::LIGHT_SWITCH:
       zbLight.setLightState(lastConfirmedLightState);
       Serial.printf("Rolled back light state to %s\n", lastConfirmedLightState ? "ON" : "OFF");
       break;
-      
+
     case CommandType::LIGHT_BRIGHTNESS:
       zbLight.setLightLevel(lastConfirmedLightBrightness);
       Serial.printf("Rolled back light brightness to %d\n", lastConfirmedLightBrightness);
       break;
-      
+
     case CommandType::LIGHT_COLOR_TEMP:
       zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
       Serial.printf("Rolled back light color temp to %d\n", lastConfirmedLightColorTemp);
       break;
 #endif
   }
+
+  isRollingBack = false;
 }
 
 /********************* OTA callback functions **************************/
@@ -450,6 +473,12 @@ void setup() {
     ESP.restart();
   }
 
+  // Enable attribute reporting for fan mode and fan direction
+  // This must be done after clusters are created but before Zigbee.begin()
+  if (!zbFanControl.enableAttributeReporting()) {
+    Serial.println("Warning: Some attributes may not support reporting");
+  }
+
   // Add OTA client to fan endpoint for over-the-air firmware updates
   if (zbFanControl.addOTAClient(OTA_FILE_VERSION, OTA_DOWNLOADED_FILE_VERSION, OTA_HW_VERSION,
                                  OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE)) {
@@ -476,20 +505,20 @@ void setup() {
     Serial.println("Rebooting...");
     ESP.restart();
   }
-  
-  // Register custom cluster handlers after Zigbee begins
-  if (!registerCustomClusterHandlers()) {
-    Serial.println("Failed to register custom cluster handlers!");
-    // Clean up allocated resources before restart
-    cleanupAllResources();
-    Serial.println("Rebooting...");
-    ESP.restart();
-  }
-  
-  Serial.println("Connecting to network");
+
+  Serial.println("Connecting to network (hold BOOT 3s to factory reset)");
   while (!Zigbee.connected()) {
     Serial.print(".");
     delay(ZIGBEE_CONNECTION_POLL_MS);
+
+    // Check for factory reset during connection attempt
+    factoryResetButton.update();
+    if (factoryResetButton.wasLongPressed()) {
+      Serial.println("\nFactory reset requested during connection...");
+      cleanupAllResources();
+      delay(FACTORY_RESET_DELAY_MS);
+      Zigbee.factoryReset();
+    }
   }
   Serial.println();
   Serial.println("Zigbee connected successfully!");
@@ -536,46 +565,12 @@ void debugLogZigbeeMessage(const char* direction, uint8_t endpoint, uint16_t clu
 }
 #endif
 
-/********************* custom cluster handlers **************************/
-// Manufacturer-specific cluster attribute write handler
-void custom_attr_write_handler(uint8_t endpoint, uint16_t attr_id, uint8_t *new_value, uint16_t manuf_code) {
-  if (attr_id == CUSTOM_ATTR_FAN_DIRECTION && manuf_code == FLS_MANUFACTURER_CODE) {
-#ifdef __DEBUG__
-    debugLogZigbeeMessage("Read", endpoint, VENTAIR_CUSTOM_CLUSTER_ID, attr_id, *new_value);
-#endif
-    statusLed.flashCommand();
-    zbFanControl.handleCustomClusterAttributeChange(VENTAIR_CUSTOM_CLUSTER_ID, attr_id, new_value);
-  }
-}
-
+/********************* utility functions **************************/
 // Global cleanup function for all allocated resources
 void cleanupAllResources() {
   Serial.println("Cleaning up all allocated resources...");
   zbFanControl.cleanupCustomCluster();
   // Add other cleanup here as needed in future
-}
-
-// Register custom cluster handlers
-bool registerCustomClusterHandlers() {
-  if (!zbFanControl.isCustomClusterRegistered()) {
-    Serial.println("Custom cluster not registered, skipping handler registration");
-    return true; // Not an error if cluster isn't registered
-  }
-  
-  esp_zb_zcl_custom_cluster_handlers_t handlers;
-  handlers.cluster_id = VENTAIR_CUSTOM_CLUSTER_ID;
-  handlers.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
-  handlers.check_value_cb = NULL;  // No value validation needed
-  handlers.write_attr_cb = custom_attr_write_handler;
-  
-  esp_err_t ret = esp_zb_zcl_custom_cluster_handlers_update(handlers);
-  if (ret == ESP_OK) {
-    Serial.println("Custom cluster handlers registered successfully");
-    return true;
-  } else {
-    Serial.printf("Failed to register custom cluster handlers: %d\\n", ret);
-    return false;
-  }
 }
 
 // Update LED status based on current Zigbee network state
