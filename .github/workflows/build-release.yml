@@ -425,8 +425,9 @@ jobs:
         run: |
           # Keep the 5 most recent dev-<sha> releases, delete the rest
           # Excludes dev-latest (managed separately)
+          # Sort by createdAt descending to ensure newest are kept
           gh release list --limit 100 --json tagName,createdAt \
-            --jq '.[] | select(.tagName | startswith("dev-") and .tagName != "dev-latest") | .tagName' \
+            --jq '[.[] | select(.tagName | startswith("dev-") and .tagName != "dev-latest")] | sort_by(.createdAt) | reverse | .[].tagName' \
             | tail -n +6 \
             | while read -r tag; do
                 echo "Deleting old dev release: $tag"
