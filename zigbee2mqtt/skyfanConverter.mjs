@@ -23,7 +23,7 @@ const fzLocal = {
         convert: (model, msg, publish, options, meta) => {
             if (Object.hasOwn(msg.data, "fanDirection")) {
                 const direction = msg.data.fanDirection === 0 ? "forward" : "reverse";
-                return {fan_direction: direction};
+                return {fan_direction_fan: direction};
             }
         },
     },

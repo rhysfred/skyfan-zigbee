@@ -22,6 +22,12 @@
 #include "SkyfanConfig.h"
 
 class SkyfanZigbeeLight : public ZigbeeColorDimmableLight {
+private:
+  // Confirmed state (last value acknowledged by MCU)
+  bool confirmedLightState = true;
+  uint8_t confirmedLightLevel = 127;
+  uint16_t confirmedColorTemp = COLOUR_TEMP_WARM_MIRED;
+
 public:
   SkyfanZigbeeLight(uint8_t endpoint) : ZigbeeColorDimmableLight(endpoint) {}
 
@@ -32,6 +38,17 @@ public:
 
   // Report all light attributes (convenience function for rollback)
   void reportAllAttributes();
+
+  // Confirmed state management (called when MCU confirms via status report)
+  void confirmLightState(bool on);
+  void confirmLightLevel(uint8_t level);
+  void confirmColorTemp(uint16_t mired);
+  bool getConfirmedLightState() const;
+  uint8_t getConfirmedLightLevel() const;
+  uint16_t getConfirmedColorTemp() const;
+
+  // Rollback to confirmed state and report to coordinator
+  void rollback();
 };
 
 #endif // SKYFAN_ZIGBEE_LIGHT_H

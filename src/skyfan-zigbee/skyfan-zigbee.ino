@@ -27,6 +27,7 @@
 #include "SkyfanZigbeeLight.h"
 #include "LedIndicator.h"
 #include "ButtonHandler.h"
+#include "Logger.h"
 #include <HardwareSerial.h>
 
 #ifdef RGB_BUILTIN
@@ -47,379 +48,109 @@ SkyfanZigbeeLight zbLight = SkyfanZigbeeLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
 #endif
 TuyaProtocol tuya(&tuyaSerial);
 
-// State tracking variables for rollback (representing MCU confirmed state)
-ZigbeeFanMode lastConfirmedFanMode = FAN_MODE_OFF;  // Default: fan off
-uint8_t lastConfirmedFanDirection = static_cast<uint8_t>(FanDirection::FORWARD);  // Default: forward
-#ifdef WITH_LIGHT
-bool lastConfirmedLightState = true;  // Default: light on
-uint8_t lastConfirmedLightBrightness = 127;  // Default: middle brightness (0-254 scale)
-uint16_t lastConfirmedLightColorTemp = COLOUR_TEMP_WARM_MIRED;  // Default: warm
-#endif
-
 // OTA state tracking
 volatile bool otaRunning = false;
 
-// Rollback state tracking - prevents callback re-triggering during rollback
-bool isRollingBack = false;
-
-// USB Serial (Serial) is used for debug output
-
-/********************* light command queue (before functions for Arduino preprocessor) **************************/
-#ifdef WITH_LIGHT
-// Light command structure for queue
-struct LightCommand {
-  bool on;
-  uint8_t level;
-  uint16_t colourTempMired;
-};
-
-// Light command queue (circular buffer)
-#define LIGHT_COMMAND_QUEUE_SIZE 8
-static LightCommand lightCommandQueue[LIGHT_COMMAND_QUEUE_SIZE];
-static uint8_t lightQueueHead = 0;  // Next position to write
-static uint8_t lightQueueTail = 0;  // Next position to read
-static uint8_t lightQueueCount = 0; // Number of items in queue
-
-// Pending light state for debounced processing (before queuing)
-static LightCommand pendingLightCmd = {true, 127, COLOUR_TEMP_WARM_MIRED};
-static unsigned long pendingLightTime = 0;
-static bool hasPendingLight = false;
-static bool lightCallbackInitialized = false;  // Skip first callback from initialization
-static bool isProcessingLightQueue = false;    // Prevent re-entry during blocking sends
-#endif
+// Rollback guard to prevent infinite recursion when rollback triggers callbacks
+static bool isRollingBack = false;
 
 /********************* fan control callback functions **************************/
 void setFan(ZigbeeFanMode mode) {
-  // Skip if we're rolling back - prevents infinite loop
+  // Guard against re-entrant calls during rollback
   if (isRollingBack) {
     return;
   }
 
-  // Zigbee state already updated when this callback is called
-#ifdef __DEBUG__
-  debugLogZigbeeMessage("Write", ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, mode);
-#endif
+  Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+             ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
   statusLed.flashCommand();
 
-  // Check if MCU is responding - if not, log command and immediately roll back
+  // Check if MCU is responding - if not, immediately roll back
   if (!tuya.isMcuResponding()) {
-    // Log what was requested
-    const char* modeName;
-    switch (mode) {
-      case FAN_MODE_OFF: modeName = "OFF (0)"; break;
-      case FAN_MODE_LOW: modeName = "LOW (1)"; break;
-      case FAN_MODE_MEDIUM: modeName = "MEDIUM (3)"; break;
-      case FAN_MODE_HIGH: modeName = "HIGH (5)"; break;
-      case FAN_MODE_ON: modeName = "ON (4)"; break;
-      default: modeName = "UNKNOWN"; break;
-    }
-    Serial.printf("INFO: Fan mode set to %s by Zigbee\n", modeName);
-
-    // Immediately roll back
-    Serial.printf("ERROR: MCU not responding - rolling back fan mode to %d\n", lastConfirmedFanMode);
+    Log::info("Fan mode set to %d by Zigbee", mode);
+    Log::error("MCU not responding - rolling back fan mode");
     isRollingBack = true;
-    zbFanControl.setFanMode(lastConfirmedFanMode);
+    zbFanControl.rollbackFanMode();
     isRollingBack = false;
-    zbFanControl.reportFanMode();
     return;
   }
 
-  bool ackReceived = false;
+  auto rollback = []() {
+    isRollingBack = true;
+    zbFanControl.rollbackFanMode();
+    isRollingBack = false;
+  };
 
   switch (mode) {
     case FAN_MODE_OFF:
-      ackReceived = tuya.sendDataPointWithTracking(DP_FAN_SWITCH, DP_TYPE_BOOL, 0, CommandType::FAN_SWITCH);
-      Serial.println("INFO: Fan mode set to OFF (0) by Zigbee");
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 0, rollback);
+      Log::info("Fan mode set to OFF (0) by Zigbee");
       break;
     case FAN_MODE_LOW:
-      // Send switch without tracking (speed command tracks the overall operation)
-      ackReceived = tuya.sendDataPoint(DP_FAN_SWITCH, DP_TYPE_BOOL, 1);
-      if (ackReceived) {
-        ackReceived = tuya.sendDataPointWithTracking(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, CommandType::FAN_SPEED);
-      }
-      Serial.println("INFO: Fan mode set to LOW (1) by Zigbee");
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback);
+      Log::info("Fan mode set to LOW (1) by Zigbee");
       break;
     case FAN_MODE_MEDIUM:
-      ackReceived = tuya.sendDataPoint(DP_FAN_SWITCH, DP_TYPE_BOOL, 1);
-      if (ackReceived) {
-        ackReceived = tuya.sendDataPointWithTracking(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, CommandType::FAN_SPEED);
-      }
-      Serial.println("INFO: Fan mode set to MEDIUM (3) by Zigbee");
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, rollback);
+      Log::info("Fan mode set to MEDIUM (3) by Zigbee");
       break;
     case FAN_MODE_HIGH:
-      ackReceived = tuya.sendDataPoint(DP_FAN_SWITCH, DP_TYPE_BOOL, 1);
-      if (ackReceived) {
-        ackReceived = tuya.sendDataPointWithTracking(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, CommandType::FAN_SPEED);
-      }
-      Serial.println("INFO: Fan mode set to HIGH (5) by Zigbee");
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, rollback);
+      Log::info("Fan mode set to HIGH (5) by Zigbee");
       break;
     case FAN_MODE_ON:
-      ackReceived = tuya.sendDataPointWithTracking(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, CommandType::FAN_SWITCH);
-      Serial.println("INFO: Fan mode set to ON (4) by Zigbee");
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);
+      Log::info("Fan mode set to ON (4) by Zigbee");
       break;
     default:
-      Serial.printf("ERROR: Unhandled fan mode: %d\n", mode);
+      Log::error("Unhandled fan mode: %d", mode);
       return;
-  }
-
-  if (!ackReceived) {
-    Serial.printf("ERROR: MCU ACK timeout - rolling back fan mode to %d\n", lastConfirmedFanMode);
-    isRollingBack = true;
-    zbFanControl.setFanMode(lastConfirmedFanMode);
-    isRollingBack = false;
-    zbFanControl.reportFanMode();
   }
 }
 
 // Fan direction control callback function
 void setFanDirection(uint8_t direction) {
-  // Skip if we're rolling back - prevents infinite loop
+  // Guard against re-entrant calls during rollback
   if (isRollingBack) {
     return;
   }
 
-  // Zigbee state already updated when this callback is called
-#ifdef __DEBUG__
-  debugLogZigbeeMessage("Write", ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, direction);
-#endif
+  Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+             ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
   statusLed.flashCommand();
 
-  // Check if MCU is responding - if not, log command and immediately roll back
+  // Check if MCU is responding - if not, immediately roll back
   if (!tuya.isMcuResponding()) {
-    Serial.printf("INFO: Fan direction set to %s (%d) by Zigbee\n",
+    Log::info("Fan direction set to %s (%d) by Zigbee",
       (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
-
-    Serial.printf("ERROR: MCU not responding - rolling back fan direction to %s (%d)\n",
-      (lastConfirmedFanDirection == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE",
-      lastConfirmedFanDirection);
+    Log::error("MCU not responding - rolling back fan direction");
     isRollingBack = true;
-    zbFanControl.setFanDirection(lastConfirmedFanDirection);
+    zbFanControl.rollbackFanDirection();
     isRollingBack = false;
-    zbFanControl.reportFanDirection();
     return;
   }
 
-  // Send command with tracking
-  bool ackReceived = tuya.sendDataPointWithTracking(DP_FAN_DIRECTION, DP_TYPE_ENUM, direction, CommandType::FAN_DIRECTION);
-
-  Serial.printf("INFO: Fan direction set to %s (%d) by Zigbee\n",
-    (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
-
-  if (!ackReceived) {
-    Serial.printf("ERROR: MCU ACK timeout - rolling back fan direction to %s\n",
-      (lastConfirmedFanDirection == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE");
+  auto rollback = []() {
     isRollingBack = true;
-    zbFanControl.setFanDirection(lastConfirmedFanDirection);
+    zbFanControl.rollbackFanDirection();
     isRollingBack = false;
-    zbFanControl.reportFanDirection();
-  }
+  };
+  tuya.queueCommand(DP_FAN_DIRECTION, DP_TYPE_ENUM, direction, rollback);
+
+  Log::info("Fan direction set to %s (%d) by Zigbee",
+    (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
 }
 
 /********************* light control callback functions **************************/
 #ifdef WITH_LIGHT
-// Queue a light command (thread-safe from Zigbee callback)
-bool queueLightCommand(const LightCommand& cmd) {
-  if (lightQueueCount >= LIGHT_COMMAND_QUEUE_SIZE) {
-    Serial.println("ERROR: Light command queue full - command dropped");
-    return false;
-  }
-  lightCommandQueue[lightQueueHead] = cmd;
-  lightQueueHead = (lightQueueHead + 1) % LIGHT_COMMAND_QUEUE_SIZE;
-  lightQueueCount++;
-  return true;
-}
-
-// Dequeue a light command
-bool dequeueLightCommand(LightCommand& cmd) {
-  if (lightQueueCount == 0) {
-    return false;
-  }
-  cmd = lightCommandQueue[lightQueueTail];
-  lightQueueTail = (lightQueueTail + 1) % LIGHT_COMMAND_QUEUE_SIZE;
-  lightQueueCount--;
-  return true;
-}
-
-// Clear the light command queue (used on rollback when MCU is unresponsive)
-void clearLightCommandQueue() {
-  lightQueueHead = 0;
-  lightQueueTail = 0;
-  lightQueueCount = 0;
-}
-
-// Check if pending command should be queued (debounce expired)
-void checkPendingLightDebounce() {
-  if (!hasPendingLight || isRollingBack) {
-    return;
-  }
-
-  // Wait for debounce period (50ms) to let all attribute updates from one action settle
-  if (millis() - pendingLightTime < 50) {
-    return;
-  }
-
-  // Debounce complete - queue this command
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: Debounce complete, queueing command (on=%d, level=%d, temp=%d)\n",
-    pendingLightCmd.on, pendingLightCmd.level, pendingLightCmd.colourTempMired);
-#endif
-  queueLightCommand(pendingLightCmd);
-  hasPendingLight = false;
-}
-
-// Process the next light command from queue (called from loop)
-void processPendingLightCommand() {
-  // First, check if any pending command has debounced and should be queued
-  checkPendingLightDebounce();
-
-  // Don't process queue if already processing (prevents re-entry) or rolling back
-  if (isProcessingLightQueue || isRollingBack) {
-    return;
-  }
-
-  // Get next command from queue
-  LightCommand cmd;
-  if (!dequeueLightCommand(cmd)) {
-    return;  // Queue empty
-  }
-
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: Processing queued command (on=%d, level=%d, temp=%d), remaining=%d\n",
-    cmd.on, cmd.level, cmd.colourTempMired, lightQueueCount);
-#endif
-
-  isProcessingLightQueue = true;
-  statusLed.flashCommand();
-
-  // Check if MCU is responding - if not, log command and immediately roll back
-  if (!tuya.isMcuResponding()) {
-    // Log the command that was received
-    Serial.printf("INFO: Light set to %s, level %d, temp %d mired (%dK) by Zigbee\n",
-      cmd.on ? "ON" : "OFF", cmd.level, cmd.colourTempMired, miredToKelvin(cmd.colourTempMired));
-
-    // Immediately roll back to last confirmed state
-    Serial.printf("ERROR: MCU not responding - rolling back light to %s, level %d, temp %d mired\n",
-      lastConfirmedLightState ? "ON" : "OFF", lastConfirmedLightBrightness, lastConfirmedLightColorTemp);
-
-    isRollingBack = true;
-    zbLight.setLightState(lastConfirmedLightState);
-    zbLight.setLightLevel(lastConfirmedLightBrightness);
-    zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
-    isRollingBack = false;
-    zbLight.reportAllAttributes();
-
-    // Clear the queue - no point sending more commands to unresponsive MCU
-    clearLightCommandQueue();
-    isProcessingLightQueue = false;
-    return;
-  }
-
-#ifdef __DEBUG__
-  debugLogZigbeeMessage("Write", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, cmd.on ? 1 : 0);
-  debugLogZigbeeMessage("Write", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, cmd.level);
-  debugLogZigbeeMessage("Write", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, cmd.colourTempMired);
-#endif
-
-#ifdef __DEBUG__
-  Serial.println("DEBUG: Sending DP_LIGHT_SWITCH...");
-#endif
-  // Send switch command - only track this one command for rollback purposes
-  bool ackReceived = tuya.sendDataPointWithTracking(DP_LIGHT_SWITCH, DP_TYPE_BOOL, cmd.on ? 1 : 0, CommandType::LIGHT_SWITCH);
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: DP_LIGHT_SWITCH %s\n", ackReceived ? "ACK received" : "ACK timeout");
-#endif
-
-  // If ACK failed, log, rollback Zigbee state, and return
-  // mcuNotResponding flag is now set - next command will see it
-  if (!ackReceived) {
-    Serial.printf("INFO: Light set to %s, level %d, temp %d mired (%dK) by Zigbee\n",
-      cmd.on ? "ON" : "OFF", cmd.level, cmd.colourTempMired, miredToKelvin(cmd.colourTempMired));
-    Serial.printf("ERROR: MCU ACK timeout - rolling back light to %s, level %d, temp %d mired\n",
-      lastConfirmedLightState ? "ON" : "OFF", lastConfirmedLightBrightness, lastConfirmedLightColorTemp);
-
-    // Rollback Zigbee state to inform coordinator
-    isRollingBack = true;
-    zbLight.setLightState(lastConfirmedLightState);
-    zbLight.setLightLevel(lastConfirmedLightBrightness);
-    zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
-    isRollingBack = false;
-    zbLight.reportAllAttributes();
-
-    // Clear the queue - no point sending more commands to unresponsive MCU
-    clearLightCommandQueue();
-    isProcessingLightQueue = false;
-    return;
-  }
-
-  if (cmd.on) {
-    // Convert Zigbee brightness (0-254) to Tuya brightness (0-5)
-    uint8_t tuyaBrightness = zigbeeBrightnessToTuya(cmd.level);
-#ifdef __DEBUG__
-    Serial.printf("DEBUG: Sending DP_LIGHT_DIMMER (tuya=%d)...\n", tuyaBrightness);
-#endif
-    // Send brightness without tracking (switch command tracks the overall operation)
-    if (!tuya.sendDataPoint(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness)) {
-      // ACK failed for brightness - log, rollback, and stop
-      Serial.printf("INFO: Light set to %s, level %d, temp %d mired (%dK) by Zigbee\n",
-        cmd.on ? "ON" : "OFF", cmd.level, cmd.colourTempMired, miredToKelvin(cmd.colourTempMired));
-      Serial.printf("ERROR: MCU ACK timeout - rolling back light to %s, level %d, temp %d mired\n",
-        lastConfirmedLightState ? "ON" : "OFF", lastConfirmedLightBrightness, lastConfirmedLightColorTemp);
-
-      isRollingBack = true;
-      zbLight.setLightState(lastConfirmedLightState);
-      zbLight.setLightLevel(lastConfirmedLightBrightness);
-      zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
-      isRollingBack = false;
-      zbLight.reportAllAttributes();
-
-      clearLightCommandQueue();
-      isProcessingLightQueue = false;
-      return;
-    }
-#ifdef __DEBUG__
-    Serial.println("DEBUG: DP_LIGHT_DIMMER ACK received");
-#endif
-
-    // Convert mired to Tuya colour temp values
-    ColourTempLevel tuyaColourTemp = miredToTuyaColourTemp(cmd.colourTempMired);
-#ifdef __DEBUG__
-    Serial.printf("DEBUG: Sending DP_LIGHT_COLOUR_TEMP (tuya=%d)...\n", static_cast<uint8_t>(tuyaColourTemp));
-#endif
-    if (!tuya.sendDataPoint(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp))) {
-      // ACK failed for colour temp - log, rollback, and stop
-      Serial.printf("INFO: Light set to %s, level %d, temp %d mired (%dK) by Zigbee\n",
-        cmd.on ? "ON" : "OFF", cmd.level, cmd.colourTempMired, miredToKelvin(cmd.colourTempMired));
-      Serial.printf("ERROR: MCU ACK timeout - rolling back light to %s, level %d, temp %d mired\n",
-        lastConfirmedLightState ? "ON" : "OFF", lastConfirmedLightBrightness, lastConfirmedLightColorTemp);
-
-      isRollingBack = true;
-      zbLight.setLightState(lastConfirmedLightState);
-      zbLight.setLightLevel(lastConfirmedLightBrightness);
-      zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
-      isRollingBack = false;
-      zbLight.reportAllAttributes();
-
-      clearLightCommandQueue();
-      isProcessingLightQueue = false;
-      return;
-    }
-#ifdef __DEBUG__
-    Serial.println("DEBUG: DP_LIGHT_COLOUR_TEMP ACK received");
-#endif
-  }
-
-  Serial.printf("INFO: Light set to %s, level %d, temp %d mired (%dK) by Zigbee\n",
-    cmd.on ? "ON" : "OFF", cmd.level, cmd.colourTempMired, miredToKelvin(cmd.colourTempMired));
-
-  isProcessingLightQueue = false;
-}
+static bool lightCallbackInitialized = false;  // Skip first callback from initialization
 
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
-  // Skip if we're rolling back - prevents infinite loop
+  // Guard against re-entrant calls during rollback
   if (isRollingBack) {
-#ifdef __DEBUG__
-    Serial.println("DEBUG: setLight() skipped - rolling back");
-#endif
     return;
   }
 
@@ -427,37 +158,51 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
   // (setLightColorTemperature() call in setup triggers this with stale values)
   if (!lightCallbackInitialized) {
     lightCallbackInitialized = true;
-#ifdef __DEBUG__
-    Serial.println("DEBUG: setLight() skipped - first init callback");
-#endif
+    Log::debug("setLight() skipped - first init callback");
     return;
   }
 
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: setLight(on=%d, level=%d, temp=%d) called\n", on, level, colourTempMired);
-#endif
+  Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+             ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, on ? 1UL : 0UL);
+  Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+             ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, (uint32_t)level);
+  Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+             ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
+  statusLed.flashCommand();
 
-  unsigned long now = millis();
-
-  // If we have a pending command and it's been more than 50ms since the last update,
-  // the previous action has finished its callback burst - queue it before starting new one
-  if (hasPendingLight && (now - pendingLightTime > 50)) {
-#ifdef __DEBUG__
-    Serial.println("DEBUG: Queueing previous pending command (>50ms elapsed)");
-#endif
-    queueLightCommand(pendingLightCmd);
-    hasPendingLight = false;
+  // Check if MCU is responding - if not, immediately roll back
+  if (!tuya.isMcuResponding()) {
+    Log::info("Light set to %s, level %d, temp %d mired (%dK) by Zigbee",
+      on ? "ON" : "OFF", level, colourTempMired, miredToKelvin(colourTempMired));
+    Log::error("MCU not responding - rolling back light");
+    isRollingBack = true;
+    zbLight.rollback();
+    isRollingBack = false;
+    return;
   }
 
-  // Update pending command (coalesces callbacks from same action within 50ms window)
-  pendingLightCmd.on = on;
-  pendingLightCmd.level = level;
-  pendingLightCmd.colourTempMired = colourTempMired;
-  pendingLightTime = now;
-  hasPendingLight = true;
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: Pending command updated, hasPendingLight=%d, queueCount=%d\n", hasPendingLight, lightQueueCount);
-#endif
+  auto rollback = []() {
+    isRollingBack = true;
+    zbLight.rollback();
+    isRollingBack = false;
+  };
+
+  // Queue switch command with rollback
+  tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, on ? 1 : 0, rollback);
+
+  if (on) {
+    // Convert Zigbee brightness (0-254) to Tuya brightness (0-5)
+    uint8_t tuyaBrightness = zigbeeBrightnessToTuya(level);
+    // Convert mired to Tuya colour temp values
+    ColourTempLevel tuyaColourTemp = miredToTuyaColourTemp(colourTempMired);
+
+    // Queue brightness and colour temp without tracking (switch tracks the operation)
+    tuya.queueCommand(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness, nullptr, false);
+    tuya.queueCommand(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp), nullptr, false);
+  }
+
+  Log::info("Light set to %s, level %d, temp %d mired (%dK) by Zigbee",
+    on ? "ON" : "OFF", level, colourTempMired, miredToKelvin(colourTempMired));
 }
 #endif
 
@@ -466,67 +211,50 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
 // Handle fan switch status updates from MCU
 void handleFanSwitchStatus(uint32_t value) {
   bool fanOn = (value != 0);
+  ZigbeeFanMode mode = fanOn ? FAN_MODE_ON : FAN_MODE_OFF;
+
   if (!zbFanControl.setFanState(fanOn)) {
-    Serial.printf("ERROR: Failed to update Zigbee fan switch status: %s\n", fanOn ? "ON" : "OFF");
+    Log::error("Failed to update Zigbee fan switch status: %s", fanOn ? "ON" : "OFF");
   } else {
-#ifdef __DEBUG__
-    debugLogZigbeeMessage("Read", ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, fanOn ? FAN_MODE_ON : FAN_MODE_OFF);
-#endif
+    Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+               ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
   }
 
-  // Update confirmed state
-  lastConfirmedFanMode = fanOn ? FAN_MODE_ON : FAN_MODE_OFF;
+  // Update confirmed state in Zigbee class
+  zbFanControl.confirmFanMode(mode);
 
-  Serial.printf("INFO: Fan switch set to %s (%d) by Skyfan\n", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
+  Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
 }
 
 // Handle fan speed status updates from MCU
 void handleFanSpeedStatus(uint32_t value) {
   uint8_t speed = static_cast<uint8_t>(value);
   if (isValidTuyaFanSpeed(speed)) {
-    if (!zbFanControl.setFanSpeed(speed)) {
-      Serial.printf("ERROR: Failed to update Zigbee fan speed status: %d\n", speed);
-    } else {
-#ifdef __DEBUG__
-      // Log the fan mode change that results from the speed change
-      ZigbeeFanMode mode;
-      switch (speed) {
-        case TUYA_FAN_SPEED_MIN: mode = FAN_MODE_OFF; break;
-        case FAN_SPEED_LOW_TUYA:
-        case FAN_SPEED_LOW_TUYA + 1: mode = FAN_MODE_LOW; break;
-        case FAN_SPEED_MEDIUM_TUYA:
-        case FAN_SPEED_MEDIUM_TUYA + 1: mode = FAN_MODE_MEDIUM; break;
-        case FAN_SPEED_HIGH_TUYA: mode = FAN_MODE_HIGH; break;
-        default: mode = FAN_MODE_ON; break;
-      }
-      debugLogZigbeeMessage("Read", ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, mode);
-#endif
-    }
-
-    // Update confirmed state based on speed
+    // Calculate the Zigbee fan mode based on speed
+    ZigbeeFanMode mode;
     switch (speed) {
-      case TUYA_FAN_SPEED_MIN:
-        lastConfirmedFanMode = FAN_MODE_OFF;
-        break;
+      case TUYA_FAN_SPEED_MIN: mode = FAN_MODE_OFF; break;
       case FAN_SPEED_LOW_TUYA:
-      case FAN_SPEED_LOW_TUYA + 1:
-        lastConfirmedFanMode = FAN_MODE_LOW;
-        break;
+      case FAN_SPEED_LOW_TUYA + 1: mode = FAN_MODE_LOW; break;
       case FAN_SPEED_MEDIUM_TUYA:
-      case FAN_SPEED_MEDIUM_TUYA + 1:
-        lastConfirmedFanMode = FAN_MODE_MEDIUM;
-        break;
-      case FAN_SPEED_HIGH_TUYA:
-        lastConfirmedFanMode = FAN_MODE_HIGH;
-        break;
-      default:
-        lastConfirmedFanMode = FAN_MODE_ON;
-        break;
+      case FAN_SPEED_MEDIUM_TUYA + 1: mode = FAN_MODE_MEDIUM; break;
+      case FAN_SPEED_HIGH_TUYA: mode = FAN_MODE_HIGH; break;
+      default: mode = FAN_MODE_ON; break;
     }
 
-    Serial.printf("INFO: Fan speed set to %d by Skyfan\n", speed);
+    if (!zbFanControl.setFanSpeed(speed)) {
+      Log::error("Failed to update Zigbee fan speed status: %d", speed);
+    } else {
+      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                 ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
+    }
+
+    // Update confirmed state in Zigbee class
+    zbFanControl.confirmFanMode(mode);
+
+    Log::info("Fan speed set to %d by Skyfan", speed);
   } else {
-    Serial.printf("ERROR: Invalid fan speed status received: %d\n", speed);
+    Log::error("Invalid fan speed status received: %d", speed);
   }
 }
 
@@ -536,9 +264,9 @@ void handleFanModeStatus(uint32_t value) {
   if (mode <= static_cast<uint8_t>(TuyaFanMode::SLEEP)) {
     const char* modeName = (mode == static_cast<uint8_t>(TuyaFanMode::NORMAL)) ? "NORMAL" :
                            (mode == static_cast<uint8_t>(TuyaFanMode::ECO)) ? "ECO" : "SLEEP";
-    Serial.printf("INFO: Fan MCU mode set to %s (%d) by Skyfan\n", modeName, mode);
+    Log::info("Fan MCU mode set to %s (%d) by Skyfan", modeName, mode);
   } else {
-    Serial.printf("ERROR: Invalid fan mode status received: %d\n", mode);
+    Log::error("Invalid fan mode status received: %d", mode);
   }
 }
 
@@ -548,20 +276,19 @@ void handleFanDirectionStatus(uint32_t value) {
   if (direction <= static_cast<uint8_t>(FanDirection::REVERSE)) {
     // Update custom manufacturer attribute for fan direction
     if (!zbFanControl.setFanDirection(direction)) {
-      Serial.printf("ERROR: Failed to update Zigbee fan direction status: %d\n", direction);
+      Log::error("Failed to update Zigbee fan direction status: %d", direction);
     } else {
-#ifdef __DEBUG__
-      debugLogZigbeeMessage("Read", ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, direction);
-#endif
+      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                 ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
     }
 
-    // Update confirmed state
-    lastConfirmedFanDirection = direction;
+    // Update confirmed state in Zigbee class
+    zbFanControl.confirmFanDirection(direction);
 
-    Serial.printf("INFO: Fan direction set to %s (%d) by Skyfan\n",
+    Log::info("Fan direction set to %s (%d) by Skyfan",
       (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
   } else {
-    Serial.printf("ERROR: Invalid fan direction status received: %d\n", direction);
+    Log::error("Invalid fan direction status received: %d", direction);
   }
 }
 
@@ -570,17 +297,16 @@ void handleFanDirectionStatus(uint32_t value) {
 void handleLightSwitchStatus(uint32_t value) {
   bool lightOn = (value != 0);
   if (!zbLight.setLightState(lightOn)) {
-    Serial.printf("ERROR: Failed to update Zigbee light switch status: %s\n", lightOn ? "ON" : "OFF");
+    Log::error("Failed to update Zigbee light switch status: %s", lightOn ? "ON" : "OFF");
   } else {
-#ifdef __DEBUG__
-    debugLogZigbeeMessage("Read", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, lightOn ? 1 : 0);
-#endif
+    Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+               ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, lightOn ? 1UL : 0UL);
   }
 
-  // Update confirmed state
-  lastConfirmedLightState = lightOn;
+  // Update confirmed state in Zigbee class
+  zbLight.confirmLightState(lightOn);
 
-  Serial.printf("INFO: Light switch set to %s (%d) by Skyfan\n", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
+  Log::info("Light switch set to %s (%d) by Skyfan", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
 }
 
 // Handle light brightness status updates from MCU
@@ -590,19 +316,18 @@ void handleLightBrightnessStatus(uint32_t value) {
   if (isValidTuyaBrightness(tuyaBrightness)) {
     uint8_t zigbeeBrightness = tuyaBrightnessToZigbee(tuyaBrightness);
     if (!zbLight.setLightLevel(zigbeeBrightness)) {
-      Serial.printf("ERROR: Failed to update Zigbee light brightness: %d\n", zigbeeBrightness);
+      Log::error("Failed to update Zigbee light brightness: %d", zigbeeBrightness);
     } else {
-#ifdef __DEBUG__
-      debugLogZigbeeMessage("Read", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, zigbeeBrightness);
-#endif
+      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                 ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, (uint32_t)zigbeeBrightness);
     }
 
-    // Update confirmed state
-    lastConfirmedLightBrightness = zigbeeBrightness;
+    // Update confirmed state in Zigbee class
+    zbLight.confirmLightLevel(zigbeeBrightness);
 
-    Serial.printf("INFO: Light brightness set to %d (Zigbee: %d) by Skyfan\n", tuyaBrightness, zigbeeBrightness);
+    Log::info("Light brightness set to %d (Zigbee: %d) by Skyfan", tuyaBrightness, zigbeeBrightness);
   } else {
-    Serial.printf("ERROR: Invalid light brightness status received: %d\n", tuyaBrightness);
+    Log::error("Invalid light brightness status received: %d", tuyaBrightness);
   }
 }
 
@@ -615,28 +340,25 @@ void handleLightColourTempStatus(uint32_t value) {
     uint16_t colourTempMired = tuyaColourTempToMired(colourLevel);
 
     if (!zbLight.setLightColorTemperature(colourTempMired)) {
-      Serial.printf("ERROR: Failed to update Zigbee light colour temperature: %d mired\n", colourTempMired);
+      Log::error("Failed to update Zigbee light colour temperature: %d mired", colourTempMired);
     } else {
-#ifdef __DEBUG__
-      debugLogZigbeeMessage("Read", ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, colourTempMired);
-#endif
+      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                 ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
     }
 
-    // Update confirmed state
-    lastConfirmedLightColorTemp = colourTempMired;
+    // Update confirmed state in Zigbee class
+    zbLight.confirmColorTemp(colourTempMired);
 
-    Serial.printf("INFO: Light colour temp set to %d mired (%dK) by Skyfan\n", colourTempMired, miredToKelvin(colourTempMired));
+    Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
   } else {
-    Serial.printf("ERROR: Invalid light colour temperature status received: %d\n", colourTempValue);
+    Log::error("Invalid light colour temperature status received: %d", colourTempValue);
   }
 }
 #endif
 
 // Handle unknown/unsupported status updates from MCU
 void handleUnknownStatus(uint8_t dpid, uint32_t value) {
-#ifdef __DEBUG__
-  Serial.printf("DEBUG: Unknown status update - DPID: %d, Value: %lu\n", dpid, value);
-#endif
+  Log::error("Unknown status update - DPID: %d, Value: %lu from Skyfan", dpid, value);
 }
 
 /********************* main device status callback function **************************/
@@ -678,72 +400,23 @@ void onDeviceStatus(uint8_t dpid, uint32_t value) {
   }
 }
 
-/********************* rollback functions **************************/
-// Handle command rollback when ACK or status timeout occurs
-void onCommandRollback(CommandType type) {
-  // Set flag to prevent callback re-triggering during rollback
-  isRollingBack = true;
-
-  switch (type) {
-    case CommandType::FAN_SWITCH:
-    case CommandType::FAN_SPEED:
-      Serial.printf("ERROR: Failed to set fan mode by Zigbee - no response from Skyfan. Rolling back to %d\n", lastConfirmedFanMode);
-      zbFanControl.setFanMode(lastConfirmedFanMode);
-      isRollingBack = false;
-      zbFanControl.reportFanMode();
-      return;
-
-    case CommandType::FAN_DIRECTION:
-      Serial.printf("ERROR: Failed to set fan direction by Zigbee - no response from Skyfan. Rolling back to %s (%d)\n",
-        (lastConfirmedFanDirection == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", lastConfirmedFanDirection);
-      zbFanControl.setFanDirection(lastConfirmedFanDirection);
-      isRollingBack = false;
-      zbFanControl.reportFanDirection();
-      return;
-
-#ifdef WITH_LIGHT
-    case CommandType::LIGHT_SWITCH:
-      // Clear the command queue - MCU isn't responding, queued commands will also fail
-      // But keep hasPendingLight - if a new command arrives after rollback, we want it
-      clearLightCommandQueue();
-      // Rollback all light attributes to last confirmed state
-      Serial.printf("ERROR: Failed to set light by Zigbee - no response from Skyfan. Rolling back to %s, level %d, temp %d mired\n",
-        lastConfirmedLightState ? "ON" : "OFF", lastConfirmedLightBrightness, lastConfirmedLightColorTemp);
-      zbLight.setLightState(lastConfirmedLightState);
-      zbLight.setLightLevel(lastConfirmedLightBrightness);
-      zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
-      isRollingBack = false;
-      zbLight.reportAllAttributes();
-      return;
-
-    // These cases are no longer used (only LIGHT_SWITCH is tracked) but kept for safety
-    case CommandType::LIGHT_BRIGHTNESS:
-    case CommandType::LIGHT_COLOR_TEMP:
-      break;
-#endif
-  }
-
-  isRollingBack = false;
-}
-
 /********************* OTA callback functions **************************/
 void otaStateCallback(bool otaActive) {
   otaRunning = otaActive;
   if (otaActive) {
-    Serial.println("INFO: OTA update started - do not power off device");
+    Log::info("OTA update started - do not power off device");
     statusLed.setStatus(LedStatus::INITIALISING);  // Use blinking LED during OTA
   } else {
-    Serial.println("INFO: OTA update finished - device will reboot");
+    Log::info("OTA update finished - device will reboot");
   }
 }
 
 /********************* Arduino functions **************************/
 void setup() {
-  Serial.begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
+  Log::begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
   tuya.begin(MCU_SERIAL_BAUD_RATE);
   tuya.setDeviceStatusCallback(onDeviceStatus);
-  tuya.setRollbackCallback(onCommandRollback);
-  Serial.println("INFO: Skyfan Zigbee Controller starting...");
+  Log::info("Skyfan Zigbee Controller starting...");
 
   // Factory reset button is initialized in constructor
 
@@ -753,9 +426,7 @@ void setup() {
   // Configure device power source as mains-powered (not battery)
   zbFanControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
   //zbLight.setPowerSource(ZB_POWER_SOURCE_MAINS);
-#ifdef __DEBUG__
-  Serial.println("DEBUG: Device configured as mains-powered");
-#endif
+  Log::debug("Device configured as mains-powered");
 
 #ifdef WITH_LIGHT
   // Configure light colour capabilities to support colour temperature
@@ -776,91 +447,71 @@ void setup() {
 #endif
 
   // Create custom cluster BEFORE endpoint registration
+  // Note: Fan control cluster is created with reporting enabled in the constructor
   if (!zbFanControl.createCustomCluster()) {
-    Serial.println("ERROR: Failed to create custom cluster - rebooting");
+    Log::error("Failed to create custom cluster - rebooting");
     cleanupAllResources();
     ESP.restart();
-  }
-
-  // Enable attribute reporting for fan mode and fan direction
-  // This must be done after clusters are created but before Zigbee.begin()
-  if (!zbFanControl.enableAttributeReporting()) {
-    Serial.println("ERROR: Some attributes may not support reporting");
   }
 
   // Add OTA client to fan endpoint for over-the-air firmware updates
   if (zbFanControl.addOTAClient(OTA_FILE_VERSION, OTA_DOWNLOADED_FILE_VERSION, OTA_HW_VERSION,
                                  OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE)) {
-#ifdef __DEBUG__
-    Serial.printf("DEBUG: OTA client added (version: 0x%08lX, manufacturer: 0x%04X, image type: 0x%04X)\n",
-                  (unsigned long)OTA_FILE_VERSION, OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE);
-#endif
+    Log::debug("OTA client added (version: 0x%08lX, manufacturer: 0x%04X, image type: 0x%04X)",
+               (unsigned long)OTA_FILE_VERSION, OTA_MANUFACTURER_CODE, OTA_IMAGE_TYPE);
     zbFanControl.onOTAStateChange(otaStateCallback);
   } else {
-    Serial.println("ERROR: Failed to add OTA client - OTA updates will not be available");
+    Log::error("Failed to add OTA client - OTA updates will not be available");
   }
 
   // Add endpoints to Zigbee Core
-#ifdef __DEBUG__
-  Serial.println("DEBUG: Adding ZigbeeFanControl endpoint to Zigbee Core");
-#endif
+  Log::debug("Adding ZigbeeFanControl endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbFanControl);
 #ifdef WITH_LIGHT
-#ifdef __DEBUG__
-  Serial.println("DEBUG: Adding ZigbeeLight endpoint to Zigbee Core");
-#endif
+  Log::debug("Adding ZigbeeLight endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbLight);
 #endif
 
   // When all EPs are registered, start Zigbee in ROUTER mode
   if (!Zigbee.begin(ZIGBEE_ROUTER)) {
-    Serial.println("ERROR: Zigbee failed to start - rebooting");
+    Log::error("Zigbee failed to start - rebooting");
     cleanupAllResources();
     ESP.restart();
   }
 
-  Serial.println("INFO: Connecting to network (hold BOOT 3s to factory reset)");
+  Log::info("Connecting to network (hold BOOT 3s to factory reset)");
   while (!Zigbee.connected()) {
-    Serial.print(".");
+    Log::raw(".");
     delay(ZIGBEE_CONNECTION_POLL_MS);
 
     // Check for factory reset during connection attempt
     factoryResetButton.update();
     if (factoryResetButton.wasLongPressed()) {
-      Serial.println("\nINFO: Factory reset requested during connection");
+      Serial.println();
+      Log::info("Factory reset requested during connection");
       cleanupAllResources();
       delay(FACTORY_RESET_DELAY_MS);
       Zigbee.factoryReset();
     }
   }
   Serial.println();
-  Serial.println("INFO: Zigbee connected successfully");
+  Log::info("Zigbee connected successfully");
 
 #ifdef WITH_LIGHT
   // Initialize color temperature to set color mode to TEMPERATURE
   // This ensures the temp callback is called for on/off and level changes
-  zbLight.setLightColorTemperature(lastConfirmedLightColorTemp);
+  zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
 #endif
 
   // Start OTA client query - first request is within a minute, then hourly automatically
   zbFanControl.requestOTAUpdate();
-#ifdef __DEBUG__
-  Serial.println("DEBUG: OTA update check scheduled");
-#endif
+  Log::debug("OTA update check scheduled");
 }
 
 void loop() {
-  // Update Tuya protocol (handles responses, heartbeat, connection status)
+  // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
   tuya.update(Zigbee.connected());
 
-  // Check for command timeouts (1.5s status response timeout)
-  tuya.checkPendingCommandTimeouts();
-
-#ifdef WITH_LIGHT
-  // Process debounced light commands
-  processPendingLightCommand();
-#endif
-  
   // Update button state (non-blocking)
   factoryResetButton.update();
   
@@ -871,9 +522,9 @@ void loop() {
   // Check for factory reset long press (blocked during OTA)
   if (factoryResetButton.wasLongPressed()) {
     if (otaRunning) {
-      Serial.println("ERROR: OTA in progress - factory reset blocked");
+      Log::error("OTA in progress - factory reset blocked");
     } else {
-      Serial.println("INFO: Factory reset requested - rebooting in 1s");
+      Log::info("Factory reset requested - rebooting in 1s");
       cleanupAllResources();
       delay(FACTORY_RESET_DELAY_MS);
       Zigbee.factoryReset();
@@ -881,21 +532,10 @@ void loop() {
   }
 }
 
-/********************* debug functions **************************/
-#ifdef __DEBUG__
-// Helper function to log Zigbee attribute changes
-void debugLogZigbeeMessage(const char* direction, uint8_t endpoint, uint16_t cluster_id, uint16_t attr_id, uint32_t value) {
-  Serial.printf("DEBUG: %s Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'\n", 
-                direction, endpoint, cluster_id, attr_id, value);
-}
-#endif
-
 /********************* utility functions **************************/
 // Global cleanup function for all allocated resources
 void cleanupAllResources() {
-#ifdef __DEBUG__
-  Serial.println("DEBUG: Cleaning up all allocated resources");
-#endif
+  Log::debug("Cleaning up all allocated resources");
   zbFanControl.cleanupCustomCluster();
   // Add other cleanup here as needed in future
 }

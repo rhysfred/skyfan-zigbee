@@ -19,17 +19,25 @@
 #define TUYA_PROTOCOL_H
 
 #include <Arduino.h>
+#include <functional>
 #include "SkyfanConfig.h"
 
-// Pending command structure for tracking command completion
-struct PendingCommand {
-  bool active;                    // Whether this slot is in use
-  uint8_t dpid;                   // Data point ID
-  uint32_t expectedValue;         // Expected value from status report
-  CommandType commandType;        // Type of command for rollback
-  unsigned long statusTimeout;    // When 1.5s timeout expires
-  
-  PendingCommand() : active(false) {}
+// Rollback callback type for command queue
+using RollbackCallback = std::function<void()>;
+
+// Queue configuration
+#define COMMAND_QUEUE_SIZE 16
+
+// Queued command structure for the command queue
+struct QueuedCommand {
+  uint8_t dpid;
+  uint8_t type;           // DP_TYPE_BOOL, DP_TYPE_VALUE, DP_TYPE_ENUM
+  uint32_t value;
+  RollbackCallback rollback;
+  bool tracked;           // Wait for status confirmation (1.5s timeout)
+  bool active;            // Slot in use
+
+  QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr), tracked(true), active(false) {}
 };
 
 // Tuya Serial Protocol Configuration
@@ -82,7 +90,6 @@ struct PendingCommand {
 class TuyaProtocol {
 private:
   uint8_t tuyaBuffer[TUYA_BUFFER_SIZE];
-  uint8_t responseBuffer[TUYA_BUFFER_SIZE];
   unsigned long lastHeartbeat;
   bool tuyaConnected;
   void (*deviceStatusCallback)(uint8_t dpid, uint32_t value);
@@ -95,13 +102,23 @@ private:
   uint16_t expectedLen;
   uint8_t currentCmd;
 
-  // Command tracking for two-phase confirmation
-  PendingCommand pendingCommands[MAX_PENDING_COMMANDS];
-  void (*rollbackCallback)(CommandType type);
-
   // MCU responsiveness tracking - when ACK timeout occurs, bypass Tuya for 2s
   bool mcuNotResponding;
   unsigned long mcuNotRespondingSince;
+
+  // Command queue (circular buffer)
+  QueuedCommand commandQueue[COMMAND_QUEUE_SIZE];
+  uint8_t queueHead = 0;  // Next position to write
+  uint8_t queueTail = 0;  // Next position to read
+  uint8_t queueCount = 0; // Number of items in queue
+
+  // Current command processing state
+  bool processingCommand = false;
+  QueuedCommand currentCommand;
+  bool awaitingAck = false;
+  bool awaitingStatus = false;
+  unsigned long commandSentTime = 0;
+  uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
@@ -111,40 +128,30 @@ public:
   
   // Core protocol functions
   void sendCommand(uint8_t cmd, uint8_t* data, uint16_t len);
-  bool sendDataPoint(uint8_t dpid, uint8_t type, uint32_t value);  // Returns true if ACK received
   void sendHeartbeat();
   void sendNetworkStatus(uint8_t status);
   void sendProductInfo();
   void sendWorkMode();
-  
-  // Fan control functions (return false on validation failure)
-  bool setFanSwitch(bool on);
-  bool setFanSpeed(uint8_t speed);
-  bool setFanMode(uint8_t mode);
-  bool setFanDirection(uint8_t direction);
-  
-  // Light control functions (return false on validation failure)
-  bool setLightSwitch(bool on);
-  bool setLightBrightness(uint8_t brightness);
-  bool setLightColourTemp(uint8_t colourTemp);
-  
+
   // Status functions
   bool isConnected() const;
   bool isMcuResponding();  // Returns false if MCU ACK timed out recently (within 2s)
   void processResponse(bool zigbeeConnected);
   void setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value));
-  void setRollbackCallback(void (*callback)(CommandType type));
-  
-  // Command tracking functions
-  bool sendDataPointWithTracking(uint8_t dpid, uint8_t type, uint32_t value, CommandType cmdType);
-  void checkPendingCommandTimeouts();
-  void addPendingCommand(uint8_t dpid, uint32_t expectedValue, CommandType cmdType);
-  void clearPendingCommand(int index);
-  bool isStatusResponseForPendingCommand(uint8_t dpid, uint32_t value);
-  
+
   // Utility functions
   static uint8_t calculateChecksum(uint8_t* data, uint16_t len);
-  bool waitForResponse(uint8_t expectedCmd, unsigned long timeout = TUYA_RESPONSE_TIMEOUT_MS);
+
+  // Command queue functions
+  bool queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
+                    RollbackCallback rollback = nullptr, bool tracked = true);
+  void processQueue();
+  void clearQueue();
+  bool isQueueEmpty() const;
+  uint8_t getQueueCount() const;
+
+  // Status matching for queue (called from processResponse)
+  void handleStatusForQueue(uint8_t dpid, uint32_t value);
 };
 
 #endif // TUYA_PROTOCOL_H

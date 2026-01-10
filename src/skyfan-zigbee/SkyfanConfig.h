@@ -75,7 +75,6 @@
 // === Timing Configuration ===
 #define TUYA_HEARTBEAT_INTERVAL_MS     10000  // 10 seconds
 #define TUYA_CONNECTION_TIMEOUT_MS     30000  // 30 seconds
-#define TUYA_RESPONSE_TIMEOUT_MS       1000   // 1 second
 #define TUYA_COMMAND_TIMEOUT_MS        500    // 0.5 seconds - ACK timeout
 #define TUYA_STATUS_RESPONSE_TIMEOUT_MS 1500  // 1.5 seconds - Status report timeout per Tuya spec
 #define MCU_NOT_RESPONDING_BYPASS_MS   2000   // 2 seconds - bypass Tuya after ACK timeout
@@ -114,7 +113,6 @@
 // === Buffer Configuration ===
 #define TUYA_BUFFER_SIZE               256
 #define TUYA_RX_BUFFER_SIZE            256
-#define MAX_PENDING_COMMANDS           5      // Maximum simultaneous pending commands
 
 // === Custom Cluster Role ===
 enum class CustomClusterRole : uint8_t {
@@ -123,16 +121,6 @@ enum class CustomClusterRole : uint8_t {
 };
 
 // === Enhanced Enums ===
-
-// Command types for pending command tracking
-enum class CommandType : uint8_t {
-  FAN_SWITCH = 0,
-  FAN_SPEED = 1,
-  FAN_DIRECTION = 2,
-  LIGHT_SWITCH = 3,
-  LIGHT_BRIGHTNESS = 4,
-  LIGHT_COLOR_TEMP = 5
-};
 
 // Colour temperature levels with clear naming
 enum class ColourTempLevel : uint8_t {

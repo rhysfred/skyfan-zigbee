@@ -16,6 +16,26 @@
  */
 
 #include "SkyfanZigbee.h"
+#include "Logger.h"
+
+// Constructor copied from ZigbeeFanControl with modifications for our use case
+SkyfanZigbeeFanControl::SkyfanZigbeeFanControl(uint8_t endpoint) : ZigbeeEP(endpoint) {
+  _device_id = ESP_ZB_HA_THERMOSTAT_DEVICE_ID;  // There is no FAN_CONTROL_DEVICE_ID in the Zigbee spec
+  fanModeCallback = nullptr;
+  fanDirectionCallback = nullptr;
+
+  // Create cluster list with basic, identify, and fan control clusters
+  // (copied exactly from ZigbeeFanControl)
+  _cluster_list = esp_zb_zcl_cluster_list_create();
+  esp_zb_cluster_list_add_basic_cluster(_cluster_list, esp_zb_basic_cluster_create(NULL), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+  esp_zb_cluster_list_add_identify_cluster(_cluster_list, esp_zb_identify_cluster_create(NULL), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+  esp_zb_cluster_list_add_fan_control_cluster(_cluster_list, esp_zb_fan_control_cluster_create(NULL), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+
+  // Set endpoint config (copied exactly from ZigbeeFanControl)
+  _ep_config = {
+    .endpoint = _endpoint, .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID, .app_device_id = ESP_ZB_HA_HEATING_COOLING_UNIT_DEVICE_ID, .app_device_version = 0
+  };
+}
 
 SkyfanZigbeeFanControl::~SkyfanZigbeeFanControl() {
   cleanupCustomCluster();
@@ -27,8 +47,26 @@ void SkyfanZigbeeFanControl::onFanDirectionChange(void (*callback)(uint8_t direc
 
 void SkyfanZigbeeFanControl::onFanModeChange(void (*callback)(ZigbeeFanMode mode)) {
   fanModeCallback = callback;
-  // Also register with parent so other mechanisms work
-  ZigbeeFanControl::onFanModeChange(callback);
+}
+
+// Copied from ZigbeeFanControl::setFanModeSequence
+bool SkyfanZigbeeFanControl::setFanModeSequence(ZigbeeFanModeSequence sequence) {
+  esp_zb_attribute_list_t *fan_control_cluster =
+    esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+  esp_err_t ret = esp_zb_cluster_update_attr(fan_control_cluster, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_SEQUENCE_ID, (void *)&sequence);
+  if (ret != ESP_OK) {
+    Log::error("Failed to set fan mode sequence: 0x%x", ret);
+    return false;
+  }
+  _current_fan_mode_sequence = sequence;
+  _current_fan_mode = FAN_MODE_OFF;
+  // Set initial fan mode to OFF
+  ret = esp_zb_cluster_update_attr(fan_control_cluster, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (void *)&_current_fan_mode);
+  if (ret != ESP_OK) {
+    Log::error("Failed to set fan mode: 0x%x", ret);
+    return false;
+  }
+  return true;
 }
 
 bool SkyfanZigbeeFanControl::setFanMode(ZigbeeFanMode mode) {
@@ -41,7 +79,11 @@ bool SkyfanZigbeeFanControl::setFanMode(ZigbeeFanMode mode) {
     (void *)&mode,
     false  // Don't check value
   );
-  return (ret == ESP_ZB_ZCL_STATUS_SUCCESS);
+  if (ret == ESP_ZB_ZCL_STATUS_SUCCESS) {
+    _current_fan_mode = mode;
+    return true;
+  }
+  return false;
 }
 
 bool SkyfanZigbeeFanControl::setFanState(bool on) {
@@ -123,22 +165,22 @@ bool SkyfanZigbeeFanControl::createCustomCluster() {
   // Create custom cluster attribute list
   customCluster = esp_zb_zcl_attr_list_create(VENTAIR_CUSTOM_CLUSTER_ID);
   if (!customCluster) {
-    Serial.println("ERROR: Failed to create custom cluster attribute list");
+    Log::error("Failed to create custom cluster attribute list");
     return false;
   }
   
-  // Add manufacturer-specific fan direction attribute
+  // Add manufacturer-specific fan direction attribute with REPORTING enabled
   uint8_t default_direction = static_cast<uint8_t>(FanDirection::FORWARD);
   esp_err_t ret = esp_zb_cluster_add_manufacturer_attr(customCluster,
                                                        VENTAIR_CUSTOM_CLUSTER_ID,
                                                        CUSTOM_ATTR_FAN_DIRECTION,
                                                        FLS_MANUFACTURER_CODE,
                                                        ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM,
-                                                       ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE,
+                                                       ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
                                                        &default_direction);
   
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to add custom fan direction attribute (code: %d)\n", ret);
+    Log::error("Failed to add custom fan direction attribute (code: %d)", ret);
     // Clean up the allocated cluster on failure
     cleanupCustomCluster();
     return false;
@@ -148,76 +190,15 @@ bool SkyfanZigbeeFanControl::createCustomCluster() {
   ret = esp_zb_cluster_list_add_custom_cluster(_cluster_list, customCluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
   
   if (ret == ESP_OK) {
-#ifdef __DEBUG__
-    Serial.println("DEBUG: Custom cluster created and registered successfully");
-#endif
+    Log::debug("Custom cluster created and registered successfully");
     customClusterRegistered = true;
     return true;
   } else {
-    Serial.printf("ERROR: Failed to add custom cluster to cluster list (code: %d)\n", ret);
+    Log::error("Failed to add custom cluster to cluster list (code: %d)", ret);
     // Clean up the allocated cluster on failure
     cleanupCustomCluster();
     return false;
   }
-}
-
-bool SkyfanZigbeeFanControl::enableAttributeReporting() {
-  bool success = true;
-
-  // Enable reporting for standard fan mode attribute
-  // Use cluster list API (works before Zigbee.begin())
-  esp_zb_attribute_list_t *fanCluster = esp_zb_cluster_list_get_cluster(
-    _cluster_list,
-    ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL,
-    ESP_ZB_ZCL_CLUSTER_SERVER_ROLE
-  );
-  if (fanCluster) {
-    // Iterate through attributes to find fan mode
-    esp_zb_attribute_list_t *attr = fanCluster;
-    bool found = false;
-    while (attr != nullptr) {
-      if (attr->attribute.id == ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID) {
-        attr->attribute.access |= ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
-#ifdef __DEBUG__
-        Serial.println("DEBUG: Enabled reporting for fan mode attribute");
-#endif
-        found = true;
-        break;
-      }
-      attr = attr->next;
-    }
-    if (!found) {
-      Serial.println("ERROR: Fan mode attribute not found in cluster");
-      success = false;
-    }
-  } else {
-    Serial.println("ERROR: Could not find fan control cluster");
-    success = false;
-  }
-
-  // Enable reporting for custom fan direction attribute (if custom cluster exists)
-  if (customCluster && customClusterRegistered) {
-    // Iterate through custom cluster attributes
-    esp_zb_attribute_list_t *attr = customCluster;
-    bool found = false;
-    while (attr != nullptr) {
-      if (attr->attribute.id == CUSTOM_ATTR_FAN_DIRECTION) {
-        attr->attribute.access |= ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
-#ifdef __DEBUG__
-        Serial.println("DEBUG: Enabled reporting for fan direction attribute");
-#endif
-        found = true;
-        break;
-      }
-      attr = attr->next;
-    }
-    if (!found) {
-      Serial.println("ERROR: Fan direction attribute not found in custom cluster");
-      success = false;
-    }
-  }
-
-  return success;
 }
 
 void SkyfanZigbeeFanControl::zbAttributeSet(const esp_zb_zcl_set_attr_value_message_t *message) {
@@ -227,27 +208,25 @@ void SkyfanZigbeeFanControl::zbAttributeSet(const esp_zb_zcl_set_attr_value_mess
       uint8_t direction = *(uint8_t *)message->attribute.data.value;
       handleCustomClusterAttributeChange(VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, &direction);
     } else {
-#ifdef __DEBUG__
-      Serial.printf("DEBUG: Received message ignored - attribute ID %d not supported for custom cluster\n", message->attribute.id);
-#endif
+      Log::debug("Received message ignored - attribute ID %d not supported for custom cluster", message->attribute.id);
     }
   } else if (message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL) {
-    // Handle standard fan control cluster (replicating parent's private zbAttributeSet)
+    // Handle standard fan control cluster
     if (message->attribute.id == ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID &&
         message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM) {
       ZigbeeFanMode mode = *(ZigbeeFanMode *)message->attribute.data.value;
+      _current_fan_mode = mode;  // Track current state
       if (fanModeCallback) {
         fanModeCallback(mode);
       }
+    } else if (message->attribute.id == ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_SEQUENCE_ID &&
+               message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM) {
+      _current_fan_mode_sequence = *(ZigbeeFanModeSequence *)message->attribute.data.value;
     } else {
-#ifdef __DEBUG__
-      Serial.printf("DEBUG: Received message ignored - attribute ID %d not supported for Fan Control\n", message->attribute.id);
-#endif
+      Log::debug("Received message ignored - attribute ID %d not supported for Fan Control", message->attribute.id);
     }
   } else {
-#ifdef __DEBUG__
-    Serial.printf("DEBUG: Received message ignored - cluster ID 0x%04X not supported\n", message->info.cluster);
-#endif
+    Log::debug("Received message ignored - cluster ID 0x%04X not supported", message->info.cluster);
   }
 }
 
@@ -275,50 +254,111 @@ void SkyfanZigbeeFanControl::cleanupCustomCluster() {
     // Setting to nullptr to indicate cleanup
     customCluster = nullptr;
     customClusterRegistered = false;
-#ifdef __DEBUG__
-    Serial.println("DEBUG: Custom cluster resources cleaned up");
-#endif
+    Log::debug("Custom cluster resources cleaned up");
   }
 }
 
 bool SkyfanZigbeeFanControl::reportFanMode() {
-  esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
-  memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
-  report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-  report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID;
-  report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-  report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL;
-  report_attr_cmd.zcl_basic_cmd.src_endpoint = _endpoint;
-  report_attr_cmd.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
+  // Build raw ZCL Report Attributes frame to bypass access flag check
+  // ZCL Frame: [frame_ctrl][seq_num][cmd_id][attr_id_lo][attr_id_hi][attr_type][attr_value]
+  uint8_t zcl_frame[7];
+  zcl_frame[0] = 0x18;  // Frame control: global cmd, server-to-client, disable default response
+  zcl_frame[1] = 0x00;  // Sequence number (will be filled by stack or ignored)
+  zcl_frame[2] = 0x0A;  // Command ID: Report Attributes
+  zcl_frame[3] = ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID & 0xFF;  // Attribute ID low byte
+  zcl_frame[4] = (ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID >> 8) & 0xFF;  // Attribute ID high byte
+  zcl_frame[5] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;  // Attribute type (0x30)
+  zcl_frame[6] = static_cast<uint8_t>(_current_fan_mode);  // Attribute value
+
+  esp_zb_apsde_data_req_t req;
+  memset(&req, 0, sizeof(req));
+  req.dst_addr_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;  // Use binding table
+  req.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
+  req.cluster_id = ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL;
+  req.src_endpoint = _endpoint;
+  req.asdu_length = sizeof(zcl_frame);
+  req.asdu = zcl_frame;
+  req.tx_options = 0;  // No special options
+  req.radius = 0;  // Use default radius
 
   esp_zb_lock_acquire(portMAX_DELAY);
-  esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
+  esp_err_t ret = esp_zb_aps_data_request(&req);
   esp_zb_lock_release();
 
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to report fan mode: 0x%x\n", ret);
+    Log::error("Failed to report fan mode via APS: 0x%x", ret);
     return false;
   }
+  Log::debug("Fan mode report sent via raw APS (mode=%d)", _current_fan_mode);
   return true;
 }
 
 bool SkyfanZigbeeFanControl::reportFanDirection() {
-  esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
-  memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
-  report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-  report_attr_cmd.attributeID = CUSTOM_ATTR_FAN_DIRECTION;
-  report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-  report_attr_cmd.clusterID = VENTAIR_CUSTOM_CLUSTER_ID;
-  report_attr_cmd.zcl_basic_cmd.src_endpoint = _endpoint;
-  report_attr_cmd.manuf_code = FLS_MANUFACTURER_CODE;
+  // Build raw ZCL Report Attributes frame for manufacturer-specific attribute
+  // ZCL Frame: [frame_ctrl][manuf_lo][manuf_hi][seq_num][cmd_id][attr_id_lo][attr_id_hi][attr_type][attr_value]
+  uint8_t direction = confirmedFanDirection;
+  uint8_t zcl_frame[9];
+  zcl_frame[0] = 0x1C;  // Frame control: global cmd, server-to-client, disable default response, manufacturer specific
+  zcl_frame[1] = FLS_MANUFACTURER_CODE & 0xFF;  // Manufacturer code low byte
+  zcl_frame[2] = (FLS_MANUFACTURER_CODE >> 8) & 0xFF;  // Manufacturer code high byte
+  zcl_frame[3] = 0x00;  // Sequence number
+  zcl_frame[4] = 0x0A;  // Command ID: Report Attributes
+  zcl_frame[5] = CUSTOM_ATTR_FAN_DIRECTION & 0xFF;  // Attribute ID low byte
+  zcl_frame[6] = (CUSTOM_ATTR_FAN_DIRECTION >> 8) & 0xFF;  // Attribute ID high byte
+  zcl_frame[7] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;  // Attribute type (0x30)
+  zcl_frame[8] = direction;  // Attribute value
+
+  esp_zb_apsde_data_req_t req;
+  memset(&req, 0, sizeof(req));
+  req.dst_addr_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;  // Use binding table
+  req.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
+  req.cluster_id = VENTAIR_CUSTOM_CLUSTER_ID;
+  req.src_endpoint = _endpoint;
+  req.asdu_length = sizeof(zcl_frame);
+  req.asdu = zcl_frame;
+  req.tx_options = 0;
+  req.radius = 0;
 
   esp_zb_lock_acquire(portMAX_DELAY);
-  esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
+  esp_err_t ret = esp_zb_aps_data_request(&req);
   esp_zb_lock_release();
 
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to report fan direction: 0x%x\n", ret);
+    Log::error("Failed to report fan direction via APS: 0x%x", ret);
     return false;
   }
+  Log::debug("Fan direction report sent via raw APS (direction=%d)", direction);
   return true;
+}
+
+// Confirmed state management
+void SkyfanZigbeeFanControl::confirmFanMode(ZigbeeFanMode mode) {
+  confirmedFanMode = mode;
+}
+
+void SkyfanZigbeeFanControl::confirmFanDirection(uint8_t direction) {
+  confirmedFanDirection = direction;
+}
+
+ZigbeeFanMode SkyfanZigbeeFanControl::getConfirmedFanMode() const {
+  return confirmedFanMode;
+}
+
+uint8_t SkyfanZigbeeFanControl::getConfirmedFanDirection() const {
+  return confirmedFanDirection;
+}
+
+// Rollback to confirmed state and report
+void SkyfanZigbeeFanControl::rollbackFanMode() {
+  bool setOk = setFanMode(confirmedFanMode);
+  bool reportOk = reportFanMode();
+  Log::info("Rolled back fan mode to %d (set=%s, report=%s)",
+            confirmedFanMode, setOk ? "ok" : "FAIL", reportOk ? "ok" : "FAIL");
+}
+
+void SkyfanZigbeeFanControl::rollbackFanDirection() {
+  bool setOk = setFanDirection(confirmedFanDirection);
+  bool reportOk = reportFanDirection();
+  Log::info("Rolled back fan direction to %d (set=%s, report=%s)",
+            confirmedFanDirection, setOk ? "ok" : "FAIL", reportOk ? "ok" : "FAIL");
 }

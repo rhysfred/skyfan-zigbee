@@ -92,12 +92,15 @@ skyfan-zigbee/
 │       ├── SkyfanConfig.h         # Configuration constants, enums, and utility functions
 │       ├── SkyfanZigbee.h         # Extended Zigbee fan control class declarations
 │       ├── SkyfanZigbee.cpp       # Extended Zigbee fan control implementation
+│       ├── SkyfanZigbeeLight.h    # Extended Zigbee light control class declarations
+│       ├── SkyfanZigbeeLight.cpp  # Extended Zigbee light control implementation
 │       ├── TuyaProtocol.h         # Tuya serial protocol header with constants and class definitions
 │       ├── TuyaProtocol.cpp       # Tuya serial protocol implementation
 │       ├── LedIndicator.h         # LED status indicator class declarations
 │       ├── LedIndicator.cpp       # LED status indicator implementation
 │       ├── ButtonHandler.h        # Non-blocking button handler class declarations
-│       └── ButtonHandler.cpp      # Non-blocking button handler implementation
+│       ├── ButtonHandler.cpp      # Non-blocking button handler implementation
+│       └── Logger.h               # Centralised logging utilities
 ├── zigbee2mqtt/
 │   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
 │   ├── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
@@ -180,14 +183,19 @@ The built-in LED provides visual feedback about the device's network status and 
 ## Technical Implementation
 
 ### Extended Zigbee Classes
-The project extends the standard ESP32 Zigbee library classes to add some missing functionality for bi-drectional operation:
+The project extends the standard ESP32 Zigbee library classes to add functionality for bidirectional operation and attribute reporting:
 
 ```cpp
-class SkyfanZigbeeFanControl : public ZigbeeFanControl {
-  // Adds public setter methods for bidirectional status updates
+class SkyfanZigbeeFanControl : public ZigbeeEP {
+  // Replicates ZigbeeFanControl with added features:
+  // - Public setter methods for bidirectional status updates
+  // - Raw APS reporting (bypasses attribute access flag limitations)
+  // - Custom manufacturer cluster for fan direction
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
   bool setFanSpeed(uint8_t speed);
+  bool reportFanMode();      // Uses raw APS for reliable reporting
+  bool reportFanDirection(); // Uses raw APS for reliable reporting
 };
 ```
 

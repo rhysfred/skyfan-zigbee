@@ -22,20 +22,30 @@
 #include "Zigbee.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_command.h"
+#include "aps/esp_zigbee_aps.h"
 #include "esp_zigbee_attribute.h"
 #include "esp_zigbee_cluster.h"
 #include "SkyfanConfig.h"
 
-// Extended ZigbeeFanControl class with custom cluster support
-class SkyfanZigbeeFanControl : public ZigbeeFanControl {
+// Custom fan control class that replicates ZigbeeFanControl functionality
+// but adds raw APS reporting (to bypass access flag checks) and custom cluster support
+class SkyfanZigbeeFanControl : public ZigbeeEP {
 private:
   void (*fanDirectionCallback)(uint8_t direction) = nullptr;
-  void (*fanModeCallback)(ZigbeeFanMode mode) = nullptr;  // Store our own ref since parent's is private
+  void (*fanModeCallback)(ZigbeeFanMode mode) = nullptr;
   esp_zb_attribute_list_t *customCluster = nullptr;
   bool customClusterRegistered = false;
 
+  // Fan state (replicated from ZigbeeFanControl since we don't inherit from it)
+  ZigbeeFanMode _current_fan_mode = FAN_MODE_OFF;
+  ZigbeeFanModeSequence _current_fan_mode_sequence = FAN_MODE_SEQUENCE_LOW_MED_HIGH;
+
+  // Confirmed state (last value acknowledged by MCU)
+  ZigbeeFanMode confirmedFanMode = FAN_MODE_OFF;
+  uint8_t confirmedFanDirection = static_cast<uint8_t>(FanDirection::FORWARD);
+
 public:
-  SkyfanZigbeeFanControl(uint8_t endpoint) : ZigbeeFanControl(endpoint) {}
+  SkyfanZigbeeFanControl(uint8_t endpoint);
   
   // Destructor to clean up allocated resources
   ~SkyfanZigbeeFanControl();
@@ -43,9 +53,18 @@ public:
   // Set callback for fan direction changes from Zigbee
   void onFanDirectionChange(void (*callback)(uint8_t direction));
 
-  // Override to capture callback (parent's is private)
+  // Set callback for fan mode changes from Zigbee
   void onFanModeChange(void (*callback)(ZigbeeFanMode mode));
-  
+
+  // Get current fan mode
+  ZigbeeFanMode getFanMode() const { return _current_fan_mode; }
+
+  // Get current fan mode sequence
+  ZigbeeFanModeSequence getFanModeSequence() const { return _current_fan_mode_sequence; }
+
+  // Set the fan mode sequence value
+  bool setFanModeSequence(ZigbeeFanModeSequence sequence);
+
   // Public setter methods for bidirectional status updates
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
@@ -57,10 +76,6 @@ public:
   
   // Create and register manufacturer-specific cluster for fan direction
   bool createCustomCluster();
-
-  // Enable attribute reporting for fan mode and custom attributes
-  // Must be called before Zigbee.begin()
-  bool enableAttributeReporting();
   
   // Handle custom cluster attribute changes (called internally by zbAttributeSet)
   void handleCustomClusterAttributeChange(uint16_t cluster_id, uint16_t attr_id, uint8_t *data);
@@ -80,6 +95,16 @@ public:
   // Report attribute values to coordinator
   bool reportFanMode();
   bool reportFanDirection();
+
+  // Confirmed state management (called when MCU confirms via status report)
+  void confirmFanMode(ZigbeeFanMode mode);
+  void confirmFanDirection(uint8_t direction);
+  ZigbeeFanMode getConfirmedFanMode() const;
+  uint8_t getConfirmedFanDirection() const;
+
+  // Rollback to confirmed state and report to coordinator
+  void rollbackFanMode();
+  void rollbackFanDirection();
 
 };
 

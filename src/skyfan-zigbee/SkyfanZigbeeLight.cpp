@@ -16,6 +16,7 @@
  */
 
 #include "SkyfanZigbeeLight.h"
+#include "Logger.h"
 
 bool SkyfanZigbeeLight::reportLightState() {
   esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
@@ -32,7 +33,7 @@ bool SkyfanZigbeeLight::reportLightState() {
   esp_zb_lock_release();
 
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to report light state: 0x%x\n", ret);
+    Log::error("Failed to report light state: 0x%x", ret);
     return false;
   }
   return true;
@@ -53,7 +54,7 @@ bool SkyfanZigbeeLight::reportLightLevel() {
   esp_zb_lock_release();
 
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to report light level: 0x%x\n", ret);
+    Log::error("Failed to report light level: 0x%x", ret);
     return false;
   }
   return true;
@@ -74,7 +75,7 @@ bool SkyfanZigbeeLight::reportLightColorTemp() {
   esp_zb_lock_release();
 
   if (ret != ESP_OK) {
-    Serial.printf("ERROR: Failed to report light color temp: 0x%x\n", ret);
+    Log::error("Failed to report light color temp: 0x%x", ret);
     return false;
   }
   return true;
@@ -84,4 +85,43 @@ void SkyfanZigbeeLight::reportAllAttributes() {
   reportLightState();
   reportLightLevel();
   reportLightColorTemp();
+}
+
+// Confirmed state management
+void SkyfanZigbeeLight::confirmLightState(bool on) {
+  confirmedLightState = on;
+}
+
+void SkyfanZigbeeLight::confirmLightLevel(uint8_t level) {
+  confirmedLightLevel = level;
+}
+
+void SkyfanZigbeeLight::confirmColorTemp(uint16_t mired) {
+  confirmedColorTemp = mired;
+}
+
+bool SkyfanZigbeeLight::getConfirmedLightState() const {
+  return confirmedLightState;
+}
+
+uint8_t SkyfanZigbeeLight::getConfirmedLightLevel() const {
+  return confirmedLightLevel;
+}
+
+uint16_t SkyfanZigbeeLight::getConfirmedColorTemp() const {
+  return confirmedColorTemp;
+}
+
+// Rollback to confirmed state and report
+void SkyfanZigbeeLight::rollback() {
+  bool stateOk = setLightState(confirmedLightState);
+  bool levelOk = setLightLevel(confirmedLightLevel);
+  bool tempOk = setLightColorTemperature(confirmedColorTemp);
+  bool reportStateOk = reportLightState();
+  bool reportLevelOk = reportLightLevel();
+  bool reportTempOk = reportLightColorTemp();
+  Log::info("Rolled back light state=%d(%s/%s), level=%d(%s/%s), temp=%d(%s/%s)",
+            confirmedLightState, stateOk ? "ok" : "FAIL", reportStateOk ? "ok" : "FAIL",
+            confirmedLightLevel, levelOk ? "ok" : "FAIL", reportLevelOk ? "ok" : "FAIL",
+            confirmedColorTemp, tempOk ? "ok" : "FAIL", reportTempOk ? "ok" : "FAIL");
 }
