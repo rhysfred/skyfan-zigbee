@@ -51,35 +51,14 @@ TuyaProtocol tuya(&tuyaSerial);
 // OTA state tracking
 volatile bool otaRunning = false;
 
-// Rollback guard to prevent infinite recursion when rollback triggers callbacks
-static bool isRollingBack = false;
-
 /********************* fan control callback functions **************************/
 void setFan(ZigbeeFanMode mode) {
-  // Guard against re-entrant calls during rollback
-  if (isRollingBack) {
-    return;
-  }
-
   Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
              ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
   statusLed.flashCommand();
 
-  // Check if MCU is responding - if not, immediately roll back
-  if (!tuya.isMcuResponding()) {
-    Log::info("Fan mode set to %d by Zigbee", mode);
-    Log::error("MCU not responding - rolling back fan mode");
-    isRollingBack = true;
-    zbFanControl.rollbackFanMode();
-    isRollingBack = false;
-    return;
-  }
-
-  auto rollback = []() {
-    isRollingBack = true;
-    zbFanControl.rollbackFanMode();
-    isRollingBack = false;
-  };
+  // Rollback callback - TuyaProtocol handles re-entry guard and MCU responding check
+  auto rollback = []() { zbFanControl.rollbackFanMode(); };
 
   switch (mode) {
     case FAN_MODE_OFF:
@@ -113,31 +92,12 @@ void setFan(ZigbeeFanMode mode) {
 
 // Fan direction control callback function
 void setFanDirection(uint8_t direction) {
-  // Guard against re-entrant calls during rollback
-  if (isRollingBack) {
-    return;
-  }
-
   Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
              ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
   statusLed.flashCommand();
 
-  // Check if MCU is responding - if not, immediately roll back
-  if (!tuya.isMcuResponding()) {
-    Log::info("Fan direction set to %s (%d) by Zigbee",
-      (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
-    Log::error("MCU not responding - rolling back fan direction");
-    isRollingBack = true;
-    zbFanControl.rollbackFanDirection();
-    isRollingBack = false;
-    return;
-  }
-
-  auto rollback = []() {
-    isRollingBack = true;
-    zbFanControl.rollbackFanDirection();
-    isRollingBack = false;
-  };
+  // Rollback callback - TuyaProtocol handles re-entry guard and MCU responding check
+  auto rollback = []() { zbFanControl.rollbackFanDirection(); };
   tuya.queueCommand(DP_FAN_DIRECTION, DP_TYPE_ENUM, direction, rollback);
 
   Log::info("Fan direction set to %s (%d) by Zigbee",
@@ -149,11 +109,6 @@ void setFanDirection(uint8_t direction) {
 static bool lightCallbackInitialized = false;  // Skip first callback from initialization
 
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
-  // Guard against re-entrant calls during rollback
-  if (isRollingBack) {
-    return;
-  }
-
   // Skip the first callback which is triggered by initialization
   // (setLightColorTemperature() call in setup triggers this with stale values)
   if (!lightCallbackInitialized) {
@@ -170,22 +125,8 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
              ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
   statusLed.flashCommand();
 
-  // Check if MCU is responding - if not, immediately roll back
-  if (!tuya.isMcuResponding()) {
-    Log::info("Light set to %s, level %d, temp %d mired (%dK) by Zigbee",
-      on ? "ON" : "OFF", level, colourTempMired, miredToKelvin(colourTempMired));
-    Log::error("MCU not responding - rolling back light");
-    isRollingBack = true;
-    zbLight.rollback();
-    isRollingBack = false;
-    return;
-  }
-
-  auto rollback = []() {
-    isRollingBack = true;
-    zbLight.rollback();
-    isRollingBack = false;
-  };
+  // Rollback callback - TuyaProtocol handles re-entry guard and MCU responding check
+  auto rollback = []() { zbLight.rollback(); };
 
   // Queue switch command with rollback
   tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, on ? 1 : 0, rollback);
@@ -348,7 +289,6 @@ void handleLightColourTempStatus(uint32_t value) {
 
     // Update confirmed state in Zigbee class
     zbLight.confirmColorTemp(colourTempMired);
-
     Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
   } else {
     Log::error("Invalid light colour temperature status received: %d", colourTempValue);
@@ -418,14 +358,11 @@ void setup() {
   tuya.setDeviceStatusCallback(onDeviceStatus);
   Log::info("Skyfan Zigbee Controller starting...");
 
-  // Factory reset button is initialized in constructor
-
   // Set Zigbee device name and model
   zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);
 
   // Configure device power source as mains-powered (not battery)
   zbFanControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
-  //zbLight.setPowerSource(ZB_POWER_SOURCE_MAINS);
   Log::debug("Device configured as mains-powered");
 
 #ifdef WITH_LIGHT
@@ -447,7 +384,6 @@ void setup() {
 #endif
 
   // Create custom cluster BEFORE endpoint registration
-  // Note: Fan control cluster is created with reporting enabled in the constructor
   if (!zbFanControl.createCustomCluster()) {
     Log::error("Failed to create custom cluster - rebooting");
     cleanupAllResources();

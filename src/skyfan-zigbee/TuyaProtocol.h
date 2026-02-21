@@ -106,6 +106,9 @@ private:
   bool mcuNotResponding;
   unsigned long mcuNotRespondingSince;
 
+  // Rollback guard - prevents re-entrant command queueing during rollback
+  bool rollbackInProgress = false;
+
   // Command queue (circular buffer)
   QueuedCommand commandQueue[COMMAND_QUEUE_SIZE];
   uint8_t queueHead = 0;  // Next position to write

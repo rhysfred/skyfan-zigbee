@@ -343,6 +343,21 @@ bool TuyaProtocol::isMcuResponding() {
 
 bool TuyaProtocol::queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
                                  RollbackCallback rollback, bool tracked) {
+  // Prevent re-entrant queueing during rollback (e.g., if Zigbee callback fires)
+  if (rollbackInProgress) {
+    Log::debug("Ignoring command during rollback DPID=%d", dpid);
+    return false;
+  }
+
+  // If MCU not responding, trigger immediate rollback instead of queueing
+  if (!isMcuResponding() && rollback) {
+    Log::error("MCU not responding - triggering immediate rollback for DPID=%d", dpid);
+    rollbackInProgress = true;
+    rollback();
+    rollbackInProgress = false;
+    return false;
+  }
+
   if (queueCount >= COMMAND_QUEUE_SIZE) {
     Log::debug("Command queue full, dropping command");
     return false;
@@ -377,7 +392,9 @@ void TuyaProtocol::processQueue() {
       mcuNotRespondingSince = now;
 
       if (currentCommand.rollback) {
+        rollbackInProgress = true;
         currentCommand.rollback();
+        rollbackInProgress = false;
       }
 
       clearQueue();
@@ -396,7 +413,9 @@ void TuyaProtocol::processQueue() {
       // Status timeout - invoke rollback
       Log::error("Status timeout for DPID=%d - rolling back", currentCommand.dpid);
       if (currentCommand.rollback) {
+        rollbackInProgress = true;
         currentCommand.rollback();
+        rollbackInProgress = false;
       }
 
       processingCommand = false;
