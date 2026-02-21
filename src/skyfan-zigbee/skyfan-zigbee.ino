@@ -354,9 +354,13 @@ void otaStateCallback(bool otaActive) {
 /********************* Arduino functions **************************/
 void setup() {
   Log::begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
-  tuya.begin(MCU_SERIAL_BAUD_RATE);
-  tuya.setDeviceStatusCallback(onDeviceStatus);
   Log::info("Skyfan Zigbee Controller starting...");
+
+  // Negotiate baud rate with MCU (tries 9600 first, then 115200)
+  uint32_t mcuBaudRate = tuya.negotiateBaudRate();
+  Log::info("MCU serial baud rate: %lu", mcuBaudRate);
+
+  tuya.setDeviceStatusCallback(onDeviceStatus);
 
   // Set Zigbee device name and model
   zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);

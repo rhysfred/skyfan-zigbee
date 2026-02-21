@@ -53,7 +53,6 @@
 #define DEBUG_SERIAL_RX_PIN        21
 #define DEBUG_SERIAL_TX_PIN        20
 #define DEBUG_SERIAL_BAUD_RATE     9600
-#define MCU_SERIAL_BAUD_RATE       115200
 
 // === Zigbee Configuration ===
 #define ZIGBEE_FAN_CONTROL_ENDPOINT    1
@@ -80,6 +79,13 @@
 #define MCU_NOT_RESPONDING_BYPASS_MS   2000   // 2 seconds - bypass Tuya after ACK timeout
 #define ZIGBEE_CONNECTION_POLL_MS      100    // 100ms
 #define FACTORY_RESET_DELAY_MS         1000   // 1 second
+
+// === Baud Rate Negotiation ===
+#define BAUD_RATE_PRIMARY              9600     // Try first (per Tuya spec)
+#define BAUD_RATE_SECONDARY            115200   // Try second (also used as fallback)
+#define BAUD_NEGOTIATION_INTERVAL_MS   1000     // 1 second between queries (per Tuya spec)
+#define BAUD_NEGOTIATION_MAX_CYCLES    5        // Max full cycles (each tries both rates)
+// Note: Uses TUYA_COMMAND_TIMEOUT_MS (500ms) for response timeout per Tuya spec
 
 
 // === Colour Temperature Configuration ===

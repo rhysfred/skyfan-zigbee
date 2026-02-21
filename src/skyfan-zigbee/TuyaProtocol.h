@@ -126,8 +126,13 @@ private:
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
   
-  void begin(uint32_t baudRate = MCU_SERIAL_BAUD_RATE);
+  void begin(uint32_t baudRate = BAUD_RATE_SECONDARY);
   void update(bool zigbeeConnected);
+
+  // Baud rate negotiation - tries 9600 first, then 115200
+  // Cycles up to maxCycles times, returns negotiated baud rate
+  // Falls back to BAUD_RATE_DEFAULT (115200) if negotiation fails
+  uint32_t negotiateBaudRate(uint8_t maxCycles = BAUD_NEGOTIATION_MAX_CYCLES);
   
   // Core protocol functions
   void sendCommand(uint8_t cmd, uint8_t* data, uint16_t len);
