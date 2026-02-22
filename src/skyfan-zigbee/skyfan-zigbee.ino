@@ -23,6 +23,7 @@
 #include "Zigbee.h"
 #include "SkyfanConfig.h"
 #include "TuyaProtocol.h"
+#include "PersistedProperties.h"
 #include "SkyfanZigbee.h"
 #include "SkyfanZigbeeLight.h"
 #include "LedIndicator.h"
@@ -47,6 +48,7 @@ SkyfanZigbeeFanControl zbFanControl = SkyfanZigbeeFanControl(ZIGBEE_FAN_CONTROL_
 SkyfanZigbeeLight zbLight = SkyfanZigbeeLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
 #endif
 TuyaProtocol tuya(&tuyaSerial);
+PersistedProperties props;
 
 // OTA state tracking
 volatile bool otaRunning = false;
@@ -356,9 +358,21 @@ void setup() {
   Log::begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
   Log::info("Skyfan Zigbee Controller starting...");
 
-  // Negotiate baud rate with MCU (tries 9600 first, then 115200)
-  uint32_t mcuBaudRate = tuya.negotiateBaudRate();
-  Log::info("MCU serial baud rate: %lu", mcuBaudRate);
+  // Load persisted properties from NVS
+  props.begin();
+
+  // Connect to MCU - use persisted baud rate if available, otherwise negotiate
+  uint32_t storedRate = props.getMcuBaudRate();
+  if (storedRate > 0) {
+    Log::info("Using persisted baud rate: %lu", storedRate);
+    tuya.connect(storedRate);
+  } else {
+    int32_t result = tuya.connect();
+    if (result > 0) {
+      props.setMcuBaudRate(result);
+      Log::info("Persisted negotiated baud rate: %d", result);
+    }
+  }
 
   tuya.setDeviceStatusCallback(onDeviceStatus);
 

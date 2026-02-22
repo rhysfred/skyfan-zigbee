@@ -75,101 +75,130 @@ void TuyaProtocol::begin(uint32_t baudRate) {
   serial->begin(baudRate);
 }
 
-uint32_t TuyaProtocol::negotiateBaudRate(uint8_t maxCycles) {
+// Check heartbeat - sends heartbeat and waits for response
+// Returns true if heartbeat response received within timeout
+bool TuyaProtocol::checkHeartbeat() {
+  unsigned long startTime = millis();
+
+  // Clear any stale data in RX buffer
+  while (serial->available()) {
+    serial->read();
+  }
+
+  // Send heartbeat request
+  sendHeartbeat();
+
+  // Wait for response with timeout
+  uint8_t responseState = 0;  // 0=wait55, 1=waitAA, 2=waitVer, 3=waitCmd, 4+=data
+  uint8_t responseCmd = 0xFF;
+  uint8_t responseDataLen = 0;
+  uint8_t responseData[16];
+  uint8_t responseIdx = 0;
+
+  while ((millis() - startTime) < TUYA_COMMAND_TIMEOUT_MS) {
+    if (serial->available()) {
+      uint8_t byte = serial->read();
+
+      switch (responseState) {
+        case 0:  // Waiting for 0x55
+          if (byte == 0x55) {
+            responseState = 1;
+          }
+          break;
+
+        case 1:  // Waiting for 0xAA
+          if (byte == 0xAA) {
+            responseState = 2;
+          } else {
+            responseState = 0;  // Reset on invalid header
+          }
+          break;
+
+        case 2:  // Version byte
+          responseState = 3;
+          break;
+
+        case 3:  // Command byte
+          responseCmd = byte;
+          responseState = 4;
+          break;
+
+        case 4:  // Length high byte
+          responseDataLen = byte << 8;
+          responseState = 5;
+          break;
+
+        case 5:  // Length low byte
+          responseDataLen |= byte;
+          responseIdx = 0;
+          responseState = 6;
+          break;
+
+        case 6:  // Data + checksum
+          if (responseIdx < sizeof(responseData)) {
+            responseData[responseIdx++] = byte;
+          }
+          if (responseIdx >= responseDataLen + 1) {
+            if (responseCmd == TUYA_CMD_HEARTBEAT) {
+              return true;
+            }
+            responseState = 0;
+          }
+          break;
+      }
+    }
+  }
+  return false;
+}
+
+int32_t TuyaProtocol::connect(uint32_t baudRate) {
+  if (baudRate > 0) {
+    // Verify connection at provided baud rate (5 attempts)
+    Log::info("Verifying connection at %lu baud", baudRate);
+
+    serial->end();
+    delay(10);
+    serial->begin(baudRate);
+
+    for (uint8_t attempt = 0; attempt < 5; attempt++) {
+      Log::debug("Connection attempt %d/5 at %lu baud", attempt + 1, baudRate);
+
+      if (checkHeartbeat()) {
+        Log::info("Connection verified at %lu baud", baudRate);
+        return baudRate;
+      }
+
+      // Wait remainder of 1-second interval before next attempt
+      delay(BAUD_NEGOTIATION_INTERVAL_MS - TUYA_COMMAND_TIMEOUT_MS);
+    }
+
+    Log::error("Failed to verify connection at %lu baud", baudRate);
+    return 0;
+  }
+
+  // Negotiate baud rate (try 9600 first, then 115200)
   const uint32_t baudRates[] = { BAUD_RATE_PRIMARY, BAUD_RATE_SECONDARY };
   const uint8_t numRates = sizeof(baudRates) / sizeof(baudRates[0]);
 
-  Log::info("Starting baud rate negotiation (max %d cycles)", maxCycles);
+  Log::info("Starting baud rate negotiation (max %d cycles)", BAUD_NEGOTIATION_MAX_CYCLES);
 
-  for (uint8_t cycle = 0; cycle < maxCycles; cycle++) {
+  for (uint8_t cycle = 0; cycle < BAUD_NEGOTIATION_MAX_CYCLES; cycle++) {
     for (uint8_t rateIdx = 0; rateIdx < numRates; rateIdx++) {
-      uint32_t baudRate = baudRates[rateIdx];
+      uint32_t rate = baudRates[rateIdx];
       unsigned long startTime = millis();
 
-      // Close any previous serial connection and start fresh
       serial->end();
-      delay(10);  // Brief delay for serial to fully close
-      serial->begin(baudRate);
+      delay(10);
+      serial->begin(rate);
 
-      // Clear any stale data in RX buffer
-      while (serial->available()) {
-        serial->read();
+      Log::debug("Trying %lu baud (cycle %d/%d)", rate, cycle + 1, BAUD_NEGOTIATION_MAX_CYCLES);
+
+      if (checkHeartbeat()) {
+        Log::info("Baud rate negotiation successful: %lu baud", rate);
+        return rate;
       }
 
-      Log::debug("Trying %lu baud (cycle %d/%d)", baudRate, cycle + 1, maxCycles);
-
-      // Send heartbeat request
-      sendHeartbeat();
-
-      // Wait for response with timeout
-      bool gotResponse = false;
-      uint8_t responseState = 0;  // 0=wait55, 1=waitAA, 2=waitVer, 3=waitCmd, 4+=data
-      uint8_t responseCmd = 0xFF;
-      uint8_t responseDataLen = 0;
-      uint8_t responseData[16];
-      uint8_t responseIdx = 0;
-
-      while ((millis() - startTime) < TUYA_COMMAND_TIMEOUT_MS) {
-        if (serial->available()) {
-          uint8_t byte = serial->read();
-
-          switch (responseState) {
-            case 0:  // Waiting for 0x55
-              if (byte == 0x55) {
-                responseState = 1;
-              }
-              break;
-
-            case 1:  // Waiting for 0xAA
-              if (byte == 0xAA) {
-                responseState = 2;
-              } else {
-                responseState = 0;  // Reset on invalid header
-              }
-              break;
-
-            case 2:  // Version byte
-              // Accept any version (MCU-to-module is typically 0x03)
-              responseState = 3;
-              break;
-
-            case 3:  // Command byte
-              responseCmd = byte;
-              responseState = 4;
-              break;
-
-            case 4:  // Length high byte
-              responseDataLen = byte << 8;
-              responseState = 5;
-              break;
-
-            case 5:  // Length low byte
-              responseDataLen |= byte;
-              responseIdx = 0;
-              responseState = 6;
-              break;
-
-            case 6:  // Data + checksum
-              if (responseIdx < sizeof(responseData)) {
-                responseData[responseIdx++] = byte;
-              }
-              // Check if we've received all data + checksum
-              if (responseIdx >= responseDataLen + 1) {
-                // Got a complete packet - verify it's a heartbeat response
-                if (responseCmd == TUYA_CMD_HEARTBEAT) {
-                  gotResponse = true;
-                  Log::info("Baud rate negotiation successful: %lu baud", baudRate);
-                  return baudRate;
-                }
-                // Not heartbeat - reset and keep looking
-                responseState = 0;
-              }
-              break;
-          }
-        }
-      }
-
-      // Calculate remaining time to complete 1-second interval
+      // Wait remainder of 1-second interval
       unsigned long elapsed = millis() - startTime;
       if (elapsed < BAUD_NEGOTIATION_INTERVAL_MS) {
         delay(BAUD_NEGOTIATION_INTERVAL_MS - elapsed);
@@ -177,13 +206,8 @@ uint32_t TuyaProtocol::negotiateBaudRate(uint8_t maxCycles) {
     }
   }
 
-  // Negotiation failed - use secondary baud rate as fallback
-  Log::error("Baud rate negotiation failed after %d cycles, defaulting to %lu baud",
-             maxCycles, (unsigned long)BAUD_RATE_SECONDARY);
-  serial->end();
-  delay(10);
-  serial->begin(BAUD_RATE_SECONDARY);
-  return BAUD_RATE_SECONDARY;
+  Log::error("Baud rate negotiation failed after %d cycles", BAUD_NEGOTIATION_MAX_CYCLES);
+  return -1;
 }
 
 void TuyaProtocol::update(bool zigbeeConnected) {

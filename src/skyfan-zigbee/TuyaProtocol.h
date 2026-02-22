@@ -123,16 +123,21 @@ private:
   unsigned long commandSentTime = 0;
   uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
+  // Helper for connect() - sends heartbeat, returns true if response received
+  bool checkHeartbeat();
+
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
   
   void begin(uint32_t baudRate = BAUD_RATE_SECONDARY);
   void update(bool zigbeeConnected);
 
-  // Baud rate negotiation - tries 9600 first, then 115200
-  // Cycles up to maxCycles times, returns negotiated baud rate
-  // Falls back to BAUD_RATE_DEFAULT (115200) if negotiation fails
-  uint32_t negotiateBaudRate(uint8_t maxCycles = BAUD_NEGOTIATION_MAX_CYCLES);
+  // Connect to MCU - handles baud rate verification or negotiation
+  // If baudRate > 0: verify connection at that rate (5 attempts)
+  //   Returns baudRate on success, 0 on failure
+  // If baudRate == 0: negotiate baud rate (try 9600, then 115200)
+  //   Returns negotiated rate on success, -1 on failure
+  int32_t connect(uint32_t baudRate = 0);
   
   // Core protocol functions
   void sendCommand(uint8_t cmd, uint8_t* data, uint16_t len);
