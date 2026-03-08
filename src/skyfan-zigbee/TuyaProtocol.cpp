@@ -61,10 +61,11 @@ static void debugLogPacket([[maybe_unused]] const char* direction, [[maybe_unuse
 
 TuyaProtocol::TuyaProtocol(HardwareSerial* serialInterface)
   : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), serial(serialInterface),
-    rxState(TuyaProtocolState::WAIT_HEADER_1), rxIndex(0), expectedLen(0), currentCmd(0),
-    mcuNotResponding(false), mcuNotRespondingSince(0),
+    rxState(TuyaProtocolState::WAIT_HEADER_1),
+    mcuNotResponding(false), mcuNotRespondingSince(0), radioConnected(false),
     queueHead(0), queueTail(0), queueCount(0), processingCommand(false),
     awaitingAck(false), awaitingStatus(false), commandSentTime(0), currentDpidForStatus(0) {
+  rxMessage.reset();
   // Initialize command queue
   for (int i = 0; i < COMMAND_QUEUE_SIZE; i++) {
     commandQueue[i].active = false;
@@ -75,12 +76,84 @@ void TuyaProtocol::begin(uint32_t baudRate) {
   serial->begin(baudRate);
 }
 
+void TuyaProtocol::setRadioConnected(bool connected) {
+  radioConnected = connected;
+}
+
+// Process a single byte through the packet state machine
+// Returns true when a complete packet has been received
+bool TuyaProtocol::processByte(uint8_t byte) {
+  // Header bytes are validated before storing; all other bytes store unconditionally
+  if (rxState == TuyaProtocolState::WAIT_HEADER_1) {
+    if (byte == 0x55) {
+      rxMessage.raw[rxMessage.rawLength++] = byte;
+      rxState = TuyaProtocolState::WAIT_HEADER_2;
+    }
+    return false;
+  }
+
+  if (rxState == TuyaProtocolState::WAIT_HEADER_2) {
+    if (byte == 0xAA) {
+      rxMessage.raw[rxMessage.rawLength++] = byte;
+      rxState = TuyaProtocolState::WAIT_VERSION;
+    } else {
+      rxState = TuyaProtocolState::WAIT_HEADER_1;
+      rxMessage.rawLength = 0;
+    }
+    return false;
+  }
+
+  // All remaining states: store byte first, then process
+  if (rxMessage.rawLength >= TUYA_RX_BUFFER_SIZE) {
+    rxState = TuyaProtocolState::WAIT_HEADER_1;
+    rxMessage.reset();
+    Log::error("Tuya RX buffer overflow - resetting state machine");
+    return false;
+  }
+  rxMessage.raw[rxMessage.rawLength++] = byte;
+
+  switch (rxState) {
+    case TuyaProtocolState::WAIT_VERSION:
+      rxMessage.version = byte;
+      rxState = TuyaProtocolState::WAIT_COMMAND;
+      break;
+
+    case TuyaProtocolState::WAIT_COMMAND:
+      rxMessage.command = byte;
+      rxState = TuyaProtocolState::WAIT_LENGTH_HIGH;
+      break;
+
+    case TuyaProtocolState::WAIT_LENGTH_HIGH:
+      rxMessage.dataLength = byte << 8;
+      rxState = TuyaProtocolState::WAIT_LENGTH_LOW;
+      break;
+
+    case TuyaProtocolState::WAIT_LENGTH_LOW:
+      rxMessage.dataLength |= byte;
+      rxMessage.data = rxMessage.raw + 6;  // Data starts after header
+      rxState = TuyaProtocolState::WAIT_DATA_AND_CHECKSUM;
+      break;
+
+    case TuyaProtocolState::WAIT_DATA_AND_CHECKSUM:
+      if (rxMessage.isComplete()) {
+        return true;  // Complete packet received
+      }
+      break;
+
+    default:
+      break;
+  }
+  return false;
+}
+
 // Check heartbeat - sends heartbeat and waits for response
 // Returns true if heartbeat response received within timeout
 bool TuyaProtocol::checkHeartbeat() {
   unsigned long startTime = millis();
 
-  // Clear any stale data in RX buffer
+  // Reset state machine and clear any stale data
+  rxState = TuyaProtocolState::WAIT_HEADER_1;
+  rxMessage.reset();
   while (serial->available()) {
     serial->read();
   }
@@ -89,62 +162,19 @@ bool TuyaProtocol::checkHeartbeat() {
   sendHeartbeat();
 
   // Wait for response with timeout
-  uint8_t responseState = 0;  // 0=wait55, 1=waitAA, 2=waitVer, 3=waitCmd, 4+=data
-  uint8_t responseCmd = 0xFF;
-  uint8_t responseDataLen = 0;
-  uint8_t responseData[16];
-  uint8_t responseIdx = 0;
-
   while ((millis() - startTime) < TUYA_COMMAND_TIMEOUT_MS) {
     if (serial->available()) {
       uint8_t byte = serial->read();
-
-      switch (responseState) {
-        case 0:  // Waiting for 0x55
-          if (byte == 0x55) {
-            responseState = 1;
-          }
-          break;
-
-        case 1:  // Waiting for 0xAA
-          if (byte == 0xAA) {
-            responseState = 2;
-          } else {
-            responseState = 0;  // Reset on invalid header
-          }
-          break;
-
-        case 2:  // Version byte
-          responseState = 3;
-          break;
-
-        case 3:  // Command byte
-          responseCmd = byte;
-          responseState = 4;
-          break;
-
-        case 4:  // Length high byte
-          responseDataLen = byte << 8;
-          responseState = 5;
-          break;
-
-        case 5:  // Length low byte
-          responseDataLen |= byte;
-          responseIdx = 0;
-          responseState = 6;
-          break;
-
-        case 6:  // Data + checksum
-          if (responseIdx < sizeof(responseData)) {
-            responseData[responseIdx++] = byte;
-          }
-          if (responseIdx >= responseDataLen + 1) {
-            if (responseCmd == TUYA_CMD_HEARTBEAT) {
-              return true;
-            }
-            responseState = 0;
-          }
-          break;
+      if (processByte(byte)) {
+        // Complete packet received - check if heartbeat
+        bool isHeartbeat = (rxMessage.command == TUYA_CMD_HEARTBEAT);
+        // Reset state machine for next packet
+        rxState = TuyaProtocolState::WAIT_HEADER_1;
+        rxMessage.reset();
+        if (isHeartbeat) {
+          return true;
+        }
+        // Not heartbeat - keep waiting
       }
     }
   }
@@ -210,8 +240,8 @@ int32_t TuyaProtocol::connect(uint32_t baudRate) {
   return -1;
 }
 
-void TuyaProtocol::update(bool zigbeeConnected) {
-  processResponse(zigbeeConnected);
+void TuyaProtocol::update() {
+  processResponse();
 
   // Process command queue
   processQueue();
@@ -221,7 +251,6 @@ void TuyaProtocol::update(bool zigbeeConnected) {
   if (millis() - lastHeartbeatSent > TUYA_HEARTBEAT_INTERVAL_MS) {
     sendHeartbeat();
     lastHeartbeatSent = millis();
-    // Heartbeat sent to MCU
   }
 
   // Check connection status
@@ -230,16 +259,15 @@ void TuyaProtocol::update(bool zigbeeConnected) {
     Log::error("MCU connection lost - heartbeat timeout");
   }
 
-  // Send network status updates when Zigbee connection state changes
-  static bool lastZigbeeState = false;
+  // Send network status updates when radio connection state changes
+  static bool lastRadioState = false;
   static bool firstRun = true;
 
-  if (firstRun || lastZigbeeState != zigbeeConnected) {
-    uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
+  if (firstRun || lastRadioState != radioConnected) {
+    uint8_t status = radioConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
     sendNetworkStatus(status);
-    lastZigbeeState = zigbeeConnected;
+    lastRadioState = radioConnected;
     firstRun = false;
-    // Zigbee status change - sent status
   }
 }
 
@@ -299,161 +327,90 @@ void TuyaProtocol::setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32
   deviceStatusCallback = callback;
 }
 
-void TuyaProtocol::processResponse(bool zigbeeConnected) {
+void TuyaProtocol::processResponse() {
   while (serial->available()) {
     uint8_t byte = serial->read();
-    
-    switch (rxState) {
-      case TuyaProtocolState::WAIT_HEADER_1:
-        if (byte == 0x55) {
-          rxBuffer[rxIndex++] = byte;
-          rxState = TuyaProtocolState::WAIT_HEADER_2;
-        }
-        break;
-        
-      case TuyaProtocolState::WAIT_HEADER_2:
-        if (byte == 0xAA) {
-          rxBuffer[rxIndex++] = byte;
-          rxState = TuyaProtocolState::WAIT_VERSION;
-        } else {
-          rxState = TuyaProtocolState::WAIT_HEADER_1;
-          rxIndex = 0;
-        }
-        break;
-        
-      case TuyaProtocolState::WAIT_VERSION:
-        rxBuffer[rxIndex++] = byte;
-        rxState = TuyaProtocolState::WAIT_COMMAND;
-        break;
-        
-      case TuyaProtocolState::WAIT_COMMAND:
-        currentCmd = byte;
-        rxBuffer[rxIndex++] = byte;
-        rxState = TuyaProtocolState::WAIT_LENGTH_HIGH;
-        break;
-        
-      case TuyaProtocolState::WAIT_LENGTH_HIGH:
-        expectedLen = byte << 8;
-        rxBuffer[rxIndex++] = byte;
-        rxState = TuyaProtocolState::WAIT_LENGTH_LOW;
-        break;
-        
-      case TuyaProtocolState::WAIT_LENGTH_LOW:
-        expectedLen |= byte;
-        rxBuffer[rxIndex++] = byte;
-        rxState = TuyaProtocolState::WAIT_DATA_AND_CHECKSUM;
-        break;
-        
-      case TuyaProtocolState::WAIT_DATA_AND_CHECKSUM:
-        // Prevent buffer overflow
-        if (rxIndex < TUYA_RX_BUFFER_SIZE) {
-          rxBuffer[rxIndex++] = byte;
-        } else {
-          // Buffer overflow protection - reset state machine
-          rxState = TuyaProtocolState::WAIT_HEADER_1;
-          rxIndex = 0;
-          expectedLen = 0;
-          Log::error("Tuya RX buffer overflow - resetting state machine");
+
+    if (!processByte(byte)) {
+      continue;  // Packet not yet complete
+    }
+
+    // Complete packet received - handle command
+    if (rxMessage.command == TUYA_CMD_STATUS_REPORT) {
+      // Parse status report data points
+      uint16_t dataIndex = 0;  // Index into rxMessage.data
+      while (dataIndex < rxMessage.dataLength) {
+        if (dataIndex + 4 > rxMessage.dataLength) {
           break;
         }
-        
-        if (rxIndex >= 6 + expectedLen + 1) {
-          if (currentCmd == TUYA_CMD_STATUS_REPORT) {
-            // Parse status report data points
-            uint16_t dataIndex = 6; // Skip header, version, cmd, length
-            while (dataIndex < 6 + expectedLen && dataIndex < rxIndex) {
-              // Validate we have enough bytes for header (DPID + Type + Length = 4 bytes)
-              if (dataIndex + 4 > rxIndex) {
-                break;
-              }
-              
-              uint8_t dpid = rxBuffer[dataIndex++];
-              uint8_t type = rxBuffer[dataIndex++];
-              uint16_t len = (rxBuffer[dataIndex] << 8) | rxBuffer[dataIndex + 1];
-              dataIndex += 2;
-              
-              // Validate data length doesn't exceed remaining buffer
-              if (dataIndex + len > rxIndex || len > 8) {  // Sanity check on length
-                Log::debug("Invalid data point length: %d for DPID %d", len, dpid);
-                break;
-              }
-              
-              uint32_t value = 0;
-              bool validDataPoint = false;
-              
-              if (type == DP_TYPE_BOOL && len == 1) {
-                value = rxBuffer[dataIndex];
-                dataIndex += 1;
-                validDataPoint = true;
-              } else if (type == DP_TYPE_VALUE && len == 4) {
-                // 4-byte value in big-endian format
-                value = (rxBuffer[dataIndex] << 24) | (rxBuffer[dataIndex + 1] << 16) | 
-                        (rxBuffer[dataIndex + 2] << 8) | rxBuffer[dataIndex + 3];
-                dataIndex += 4;
-                validDataPoint = true;
-              } else if (type == DP_TYPE_ENUM && len == 1) {
-                // 1-byte enum value
-                value = rxBuffer[dataIndex];
-                dataIndex += 1;
-                validDataPoint = true;
-              } else {
-                // Skip unknown or invalid data point
-                dataIndex += len;
-                Log::debug("Skipping unknown data point type %d for DPID %d", type, dpid);
-              }
-              
-              // Call status callback if we have a valid data point and callback is registered
-              if (validDataPoint && deviceStatusCallback) {
-                // Check if this status response matches queue command
-                handleStatusForQueue(dpid, value);
 
-                deviceStatusCallback(dpid, value);
-              }
-            }
-          } else if (currentCmd == TUYA_CMD_SEND_COMMAND) {
-            // ACK received for command we sent
-            if (processingCommand && awaitingAck) {
-              Log::debug("ACK received for DPID=%d", currentDpidForStatus);
-              awaitingAck = false;
-              if (currentCommand.tracked) {
-                // Transition to waiting for status
-                awaitingStatus = true;
-              } else {
-                // Untracked command - we're done
-                processingCommand = false;
-                awaitingStatus = false;
-              }
-            }
-          } else if (currentCmd == TUYA_CMD_HEARTBEAT) {
-            tuyaConnected = true;
-            lastHeartbeat = millis();
-            // Heartbeat received - MCU is responding, clear the not responding flag
-            if (mcuNotResponding) {
-              mcuNotResponding = false;
-              Log::debug("MCU not responding flag cleared by heartbeat");
-            }
-          } else if (currentCmd == TUYA_CMD_PRODUCT_INFO) {
-            // MCU is requesting product info - send basic response
-            sendProductInfo();
-          } else if (currentCmd == TUYA_CMD_QUERY_WORK_MODE) {
-            // MCU is requesting work mode - send basic response  
-            sendWorkMode();
-          } else if (currentCmd == TUYA_CMD_NETWORK_STATUS) {
-            // MCU is requesting network status - respond with current Zigbee connection status
-            uint8_t status = zigbeeConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
-            sendNetworkStatus(status);
-            // Network status request received
-          }
+        uint8_t dpid = rxMessage.data[dataIndex++];
+        uint8_t type = rxMessage.data[dataIndex++];
+        uint16_t len = (rxMessage.data[dataIndex] << 8) | rxMessage.data[dataIndex + 1];
+        dataIndex += 2;
 
-          // Log received packet
-          debugLogPacket("Read", rxBuffer, rxIndex);
-
-          rxState = TuyaProtocolState::WAIT_HEADER_1;
-          rxIndex = 0;
-          expectedLen = 0;
+        if (dataIndex + len > rxMessage.dataLength || len > 8) {
+          Log::debug("Invalid data point length: %d for DPID %d", len, dpid);
+          break;
         }
-        break;
+
+        uint32_t value = 0;
+        bool validDataPoint = false;
+
+        if (type == DP_TYPE_BOOL && len == 1) {
+          value = rxMessage.data[dataIndex];
+          dataIndex += 1;
+          validDataPoint = true;
+        } else if (type == DP_TYPE_VALUE && len == 4) {
+          value = (rxMessage.data[dataIndex] << 24) | (rxMessage.data[dataIndex + 1] << 16) |
+                  (rxMessage.data[dataIndex + 2] << 8) | rxMessage.data[dataIndex + 3];
+          dataIndex += 4;
+          validDataPoint = true;
+        } else if (type == DP_TYPE_ENUM && len == 1) {
+          value = rxMessage.data[dataIndex];
+          dataIndex += 1;
+          validDataPoint = true;
+        } else {
+          dataIndex += len;
+          Log::debug("Skipping unknown data point type %d for DPID %d", type, dpid);
+        }
+
+        if (validDataPoint && deviceStatusCallback) {
+          handleStatusForQueue(dpid, value);
+          deviceStatusCallback(dpid, value);
+        }
+      }
+    } else if (rxMessage.command == TUYA_CMD_SEND_COMMAND) {
+      if (processingCommand && awaitingAck) {
+        Log::debug("ACK received for DPID=%d", currentDpidForStatus);
+        awaitingAck = false;
+        if (currentCommand.tracked) {
+          awaitingStatus = true;
+        } else {
+          processingCommand = false;
+          awaitingStatus = false;
+        }
+      }
+    } else if (rxMessage.command == TUYA_CMD_HEARTBEAT) {
+      tuyaConnected = true;
+      lastHeartbeat = millis();
+      if (mcuNotResponding) {
+        mcuNotResponding = false;
+        Log::debug("MCU not responding flag cleared by heartbeat");
+      }
+    } else if (rxMessage.command == TUYA_CMD_PRODUCT_INFO) {
+      sendProductInfo();
+    } else if (rxMessage.command == TUYA_CMD_QUERY_WORK_MODE) {
+      sendWorkMode();
+    } else if (rxMessage.command == TUYA_CMD_NETWORK_STATUS) {
+      uint8_t status = radioConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
+      sendNetworkStatus(status);
     }
+
+    // Log received packet and reset state machine
+    debugLogPacket("Read", rxMessage.raw, rxMessage.rawLength);
+    rxState = TuyaProtocolState::WAIT_HEADER_1;
+    rxMessage.reset();
   }
 }
 

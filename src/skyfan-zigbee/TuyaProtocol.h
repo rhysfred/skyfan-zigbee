@@ -40,6 +40,28 @@ struct QueuedCommand {
   QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr), tracked(true), active(false) {}
 };
 
+// Tuya message structure - encapsulates a complete received packet
+struct TuyaMessage {
+  uint8_t raw[TUYA_RX_BUFFER_SIZE];  // Complete raw message bytes
+  uint16_t rawLength;                 // Current length of raw data
+  uint8_t version;
+  uint8_t command;
+  uint16_t dataLength;
+  uint8_t* data;                      // Points to raw + 6 (start of data payload)
+
+  void reset() {
+    rawLength = 0;
+    version = 0;
+    command = 0;
+    dataLength = 0;
+    data = nullptr;
+  }
+
+  bool isComplete() const {
+    return rawLength >= 7 && rawLength >= 6 + dataLength + 1;
+  }
+};
+
 // Tuya Serial Protocol Configuration
 #define TUYA_HEADER 0x55AA
 #define TUYA_VERSION_MODULE_TO_MCU 0x00  // Module (us) sending to MCU
@@ -97,14 +119,14 @@ private:
 
   // Internal state for response processing
   TuyaProtocolState rxState;
-  uint8_t rxBuffer[TUYA_RX_BUFFER_SIZE];
-  uint16_t rxIndex;
-  uint16_t expectedLen;
-  uint8_t currentCmd;
+  TuyaMessage rxMessage;
 
   // MCU responsiveness tracking - when ACK timeout occurs, bypass Tuya for 2s
   bool mcuNotResponding;
   unsigned long mcuNotRespondingSince;
+
+  // Radio connection state (set via setRadioConnected(), used by processResponse())
+  bool radioConnected;
 
   // Rollback guard - prevents re-entrant command queueing during rollback
   bool rollbackInProgress = false;
@@ -123,6 +145,9 @@ private:
   unsigned long commandSentTime = 0;
   uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
+  // Packet state machine - processes one byte, returns true when packet complete
+  bool processByte(uint8_t byte);
+
   // Helper for connect() - sends heartbeat, returns true if response received
   bool checkHeartbeat();
 
@@ -130,7 +155,8 @@ public:
   TuyaProtocol(HardwareSerial* serialInterface);
   
   void begin(uint32_t baudRate = BAUD_RATE_SECONDARY);
-  void update(bool zigbeeConnected);
+  void setRadioConnected(bool connected);
+  void update();
 
   // Connect to MCU - handles baud rate verification or negotiation
   // If baudRate > 0: verify connection at that rate (5 attempts)
@@ -149,7 +175,7 @@ public:
   // Status functions
   bool isConnected() const;
   bool isMcuResponding();  // Returns false if MCU ACK timed out recently (within 2s)
-  void processResponse(bool zigbeeConnected);
+  void processResponse();
   void setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value));
 
   // Utility functions
