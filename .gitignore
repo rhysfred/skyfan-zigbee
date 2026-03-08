@@ -85,3 +85,4 @@ __pycache__/
 
 # Claude Code directory
 .claude/
+claude.md
