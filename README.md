@@ -46,7 +46,7 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 
 - **ESP32-C6** or compatible ESP32 with Zigbee support
 - **Ventair Skyfan** with Tuya MCU controller
-- **Serial Connection**: Hardware UART between ESP32 and MCU (115200 baud)
+- **Serial Connection**: Hardware UART between ESP32 and MCU (auto-negotiates 9600 or 115200 baud)
 
 ## Architecture
 
@@ -100,6 +100,8 @@ skyfan-zigbee/
 │       ├── LedIndicator.cpp       # LED status indicator implementation
 │       ├── ButtonHandler.h        # Non-blocking button handler class declarations
 │       ├── ButtonHandler.cpp      # Non-blocking button handler implementation
+│       ├── PersistedProperties.h  # NVS-backed persistent property storage declarations
+│       ├── PersistedProperties.cpp # NVS-backed persistent property storage implementation
 │       └── Logger.h               # Centralised logging utilities
 ├── zigbee2mqtt/
 │   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
@@ -116,7 +118,8 @@ skyfan-zigbee/
 
 ### Tuya Serial Protocol
 - **Frame Format**: `0x55AA + Version + Command + Length + Data + Checksum`
-- **Baud Rate**: 115200
+- **Baud Rate**: Auto-negotiated (tries 9600 first per Tuya spec, falls back to 115200)
+- **Checksum Validation**: All incoming packets validated before processing
 - **Data Points**: Boolean, Value, and Enum types for different controls
 
 ### Data Point Mapping
@@ -191,11 +194,14 @@ class SkyfanZigbeeFanControl : public ZigbeeEP {
   // - Public setter methods for bidirectional status updates
   // - Raw APS reporting (bypasses attribute access flag limitations)
   // - Custom manufacturer cluster for fan direction
+  // - Confirmed state tracking with rollback on MCU failure
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
   bool setFanSpeed(uint8_t speed);
-  bool reportFanMode();      // Uses raw APS for reliable reporting
-  bool reportFanDirection(); // Uses raw APS for reliable reporting
+  bool reportFanMode();         // Uses raw APS for reliable reporting
+  bool reportFanDirection();    // Uses raw APS for reliable reporting
+  void reportAllAttributes();   // Reports all attributes to coordinator
+  void rollback();              // Reverts to last MCU-confirmed state
 };
 ```
 
@@ -225,7 +231,8 @@ Before compiling, configure the target device type in `SkyfanConfig.h`:
 
 ### Serial Protocol
 - **Heartbeat**: 10-second intervals
-- **Timeout**: 1-second response timeout
+- **ACK Timeout**: 500ms for command acknowledgement
+- **Status Timeout**: 1.5 seconds for MCU status confirmation
 - **Buffer Size**: 256 bytes for frame processing
 
 ## OTA Updates
