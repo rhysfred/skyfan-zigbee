@@ -18,13 +18,14 @@
 #include "SkyfanZigbeeLight.h"
 #include "Logger.h"
 
-bool SkyfanZigbeeLight::reportLightState() {
+// Helper to report a single attribute to coordinator
+bool SkyfanZigbeeLight::reportAttribute(uint16_t clusterId, uint16_t attributeId) {
   esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
   memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
   report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-  report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID;
+  report_attr_cmd.attributeID = attributeId;
   report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-  report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
+  report_attr_cmd.clusterID = clusterId;
   report_attr_cmd.zcl_basic_cmd.src_endpoint = _endpoint;
   report_attr_cmd.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
 
@@ -32,53 +33,25 @@ bool SkyfanZigbeeLight::reportLightState() {
   esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
   esp_zb_lock_release();
 
-  if (ret != ESP_OK) {
-    Log::error("Failed to report light state: 0x%x", ret);
-    return false;
-  }
-  return true;
+  return ret == ESP_OK;
+}
+
+bool SkyfanZigbeeLight::reportLightState() {
+  bool ok = reportAttribute(ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID);
+  if (!ok) Log::error("Failed to report light state");
+  return ok;
 }
 
 bool SkyfanZigbeeLight::reportLightLevel() {
-  esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
-  memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
-  report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-  report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID;
-  report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-  report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL;
-  report_attr_cmd.zcl_basic_cmd.src_endpoint = _endpoint;
-  report_attr_cmd.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
-
-  esp_zb_lock_acquire(portMAX_DELAY);
-  esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
-  esp_zb_lock_release();
-
-  if (ret != ESP_OK) {
-    Log::error("Failed to report light level: 0x%x", ret);
-    return false;
-  }
-  return true;
+  bool ok = reportAttribute(ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID);
+  if (!ok) Log::error("Failed to report light level");
+  return ok;
 }
 
 bool SkyfanZigbeeLight::reportLightColorTemp() {
-  esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
-  memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
-  report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-  report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID;
-  report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-  report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL;
-  report_attr_cmd.zcl_basic_cmd.src_endpoint = _endpoint;
-  report_attr_cmd.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
-
-  esp_zb_lock_acquire(portMAX_DELAY);
-  esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
-  esp_zb_lock_release();
-
-  if (ret != ESP_OK) {
-    Log::error("Failed to report light color temp: 0x%x", ret);
-    return false;
-  }
-  return true;
+  bool ok = reportAttribute(ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
+  if (!ok) Log::error("Failed to report light color temp");
+  return ok;
 }
 
 void SkyfanZigbeeLight::reportAllAttributes() {

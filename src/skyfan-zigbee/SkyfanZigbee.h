@@ -95,6 +95,7 @@ public:
   // Report attribute values to coordinator
   bool reportFanMode();
   bool reportFanDirection();
+  void reportAllAttributes();
 
   // Confirmed state management (called when MCU confirms via status report)
   void confirmFanMode(ZigbeeFanMode mode);
@@ -103,8 +104,9 @@ public:
   uint8_t getConfirmedFanDirection() const;
 
   // Rollback to confirmed state and report to coordinator
-  void rollbackFanMode();
-  void rollbackFanDirection();
+  void rollback();          // Rolls back all attributes (fan mode + direction)
+  void rollbackFanMode();   // Rolls back fan mode only
+  void rollbackFanDirection();  // Rolls back fan direction only
 
 };
 

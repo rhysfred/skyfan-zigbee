@@ -71,6 +71,11 @@
 #define FLS_MANUFACTURER_CODE          0x1818  // Front Left Speaker manufacturer code. Again made up. Meant to be registered
 #define CUSTOM_ATTR_FAN_DIRECTION      0x0001  // Custom attribute ID for fan direction
 
+// === ZCL Frame Control Bytes (for raw APS reporting) ===
+#define ZCL_FRAME_CTRL_GLOBAL_TO_CLIENT          0x18  // Global cmd, server-to-client, disable default response
+#define ZCL_FRAME_CTRL_GLOBAL_TO_CLIENT_MANUF    0x1C  // Same as above + manufacturer specific
+#define ZCL_CMD_REPORT_ATTRIBUTES                0x0A  // Report Attributes command ID
+
 // === Timing Configuration ===
 #define TUYA_HEARTBEAT_INTERVAL_MS     10000  // 10 seconds
 #define TUYA_CONNECTION_TIMEOUT_MS     30000  // 30 seconds

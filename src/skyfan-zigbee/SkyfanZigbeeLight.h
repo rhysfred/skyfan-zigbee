@@ -28,6 +28,9 @@ private:
   uint8_t confirmedLightLevel = 127;
   uint16_t confirmedColorTemp = COLOUR_TEMP_WARM_MIRED;
 
+  // Helper to report a single attribute to coordinator
+  bool reportAttribute(uint16_t clusterId, uint16_t attributeId);
+
 public:
   SkyfanZigbeeLight(uint8_t endpoint) : ZigbeeColorDimmableLight(endpoint) {}
 

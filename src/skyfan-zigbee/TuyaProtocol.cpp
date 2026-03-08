@@ -63,13 +63,9 @@ TuyaProtocol::TuyaProtocol(HardwareSerial* serialInterface)
   : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), serial(serialInterface),
     rxState(TuyaProtocolState::WAIT_HEADER_1),
     mcuNotResponding(false), mcuNotRespondingSince(0), radioConnected(false),
-    queueHead(0), queueTail(0), queueCount(0), processingCommand(false),
-    awaitingAck(false), awaitingStatus(false), commandSentTime(0), currentDpidForStatus(0) {
+    queueHead(0), queueTail(0), queueCount(0),
+    queueState(CommandQueueState::IDLE), commandSentTime(0), currentDpidForStatus(0) {
   rxMessage.reset();
-  // Initialize command queue
-  for (int i = 0; i < COMMAND_QUEUE_SIZE; i++) {
-    commandQueue[i].active = false;
-  }
 }
 
 void TuyaProtocol::begin(uint32_t baudRate) {
@@ -130,13 +126,22 @@ bool TuyaProtocol::processByte(uint8_t byte) {
 
     case TuyaProtocolState::WAIT_LENGTH_LOW:
       rxMessage.dataLength |= byte;
-      rxMessage.data = rxMessage.raw + 6;  // Data starts after header
+      rxMessage.data = rxMessage.raw + TUYA_HEADER_SIZE;  // Data starts after header
       rxState = TuyaProtocolState::WAIT_DATA_AND_CHECKSUM;
       break;
 
     case TuyaProtocolState::WAIT_DATA_AND_CHECKSUM:
       if (rxMessage.isComplete()) {
-        return true;  // Complete packet received
+        // Validate checksum before accepting packet
+        uint8_t expectedChecksum = calculateChecksum(rxMessage.raw + 2, rxMessage.rawLength - 3);
+        uint8_t receivedChecksum = rxMessage.raw[rxMessage.rawLength - 1];
+        if (expectedChecksum != receivedChecksum) {
+          Log::error("Checksum mismatch: expected 0x%02X, got 0x%02X", expectedChecksum, receivedChecksum);
+          rxState = TuyaProtocolState::WAIT_HEADER_1;
+          rxMessage.reset();
+          return false;
+        }
+        return true;  // Complete and valid packet received
       }
       break;
 
@@ -381,14 +386,12 @@ void TuyaProtocol::processResponse() {
         }
       }
     } else if (rxMessage.command == TUYA_CMD_SEND_COMMAND) {
-      if (processingCommand && awaitingAck) {
+      if (queueState == CommandQueueState::AWAITING_ACK) {
         Log::debug("ACK received for DPID=%d", currentDpidForStatus);
-        awaitingAck = false;
         if (currentCommand.tracked) {
-          awaitingStatus = true;
+          queueState = CommandQueueState::AWAITING_STATUS;
         } else {
-          processingCommand = false;
-          awaitingStatus = false;
+          queueState = CommandQueueState::IDLE;
         }
       }
     } else if (rxMessage.command == TUYA_CMD_HEARTBEAT) {
@@ -461,7 +464,6 @@ bool TuyaProtocol::queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
   cmd.value = value;
   cmd.rollback = rollback;
   cmd.tracked = tracked;
-  cmd.active = true;
 
   queueHead = (queueHead + 1) % COMMAND_QUEUE_SIZE;
   queueCount++;
@@ -475,98 +477,86 @@ bool TuyaProtocol::queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
 void TuyaProtocol::processQueue() {
   unsigned long now = millis();
 
-  // State: AWAITING_ACK - check for ACK timeout
-  if (processingCommand && awaitingAck) {
-    if (now - commandSentTime >= TUYA_COMMAND_TIMEOUT_MS) {
-      // ACK timeout - invoke rollback, set mcuNotResponding, clear queue
-      Log::error("ACK timeout for DPID=%d - MCU not responding, rolling back", currentCommand.dpid);
-      mcuNotResponding = true;
-      mcuNotRespondingSince = now;
+  switch (queueState) {
+    case CommandQueueState::AWAITING_ACK:
+      if (now - commandSentTime >= TUYA_COMMAND_TIMEOUT_MS) {
+        // ACK timeout - invoke rollback, set mcuNotResponding, clear queue
+        Log::error("ACK timeout for DPID=%d - MCU not responding, rolling back", currentCommand.dpid);
+        mcuNotResponding = true;
+        mcuNotRespondingSince = now;
 
-      if (currentCommand.rollback) {
-        rollbackInProgress = true;
-        currentCommand.rollback();
-        rollbackInProgress = false;
+        if (currentCommand.rollback) {
+          rollbackInProgress = true;
+          currentCommand.rollback();
+          rollbackInProgress = false;
+        }
+
+        clearQueue();
+        queueState = CommandQueueState::IDLE;
       }
-
-      clearQueue();
-      processingCommand = false;
-      awaitingAck = false;
-      awaitingStatus = false;
+      // Still waiting for ACK - don't process further
       return;
-    }
-    // Still waiting for ACK - don't process further
-    return;
-  }
 
-  // State: AWAITING_STATUS - check for status timeout
-  if (processingCommand && awaitingStatus) {
-    if (now - commandSentTime >= TUYA_STATUS_RESPONSE_TIMEOUT_MS) {
-      // Status timeout - invoke rollback
-      Log::error("Status timeout for DPID=%d - rolling back", currentCommand.dpid);
-      if (currentCommand.rollback) {
-        rollbackInProgress = true;
-        currentCommand.rollback();
-        rollbackInProgress = false;
+    case CommandQueueState::AWAITING_STATUS:
+      if (now - commandSentTime >= TUYA_STATUS_RESPONSE_TIMEOUT_MS) {
+        // Status timeout - invoke rollback
+        Log::error("Status timeout for DPID=%d - rolling back", currentCommand.dpid);
+        if (currentCommand.rollback) {
+          rollbackInProgress = true;
+          currentCommand.rollback();
+          rollbackInProgress = false;
+        }
+        queueState = CommandQueueState::IDLE;
+        // Don't clear queue - just move to next command
       }
+      // Still waiting for status - don't process further
+      return;
 
-      processingCommand = false;
-      awaitingAck = false;
-      awaitingStatus = false;
-      // Don't clear queue - just move to next command
-    }
-    // Still waiting for status - don't process further
-    return;
-  }
+    case CommandQueueState::IDLE:
+      // Check if we have commands to process
+      if (queueCount > 0) {
+        // Dequeue next command
+        currentCommand = commandQueue[queueTail];
+        queueTail = (queueTail + 1) % COMMAND_QUEUE_SIZE;
+        queueCount--;
 
-  // State: IDLE - check if we have commands to process
-  if (!processingCommand && queueCount > 0) {
-    // Dequeue next command
-    currentCommand = commandQueue[queueTail];
-    commandQueue[queueTail].active = false;
-    queueTail = (queueTail + 1) % COMMAND_QUEUE_SIZE;
-    queueCount--;
+        // Send command (non-blocking - just send, don't wait for response)
+        uint8_t data[8];
+        uint16_t dataLen = 0;
 
-    // Send command (non-blocking - just send, don't wait for response)
-    uint8_t data[8];
-    uint16_t dataLen = 0;
+        data[dataLen++] = currentCommand.dpid;
+        data[dataLen++] = currentCommand.type;
 
-    data[dataLen++] = currentCommand.dpid;
-    data[dataLen++] = currentCommand.type;
+        if (currentCommand.type == DP_TYPE_BOOL) {
+          data[dataLen++] = 0x00;
+          data[dataLen++] = DP_BOOL_PAYLOAD_LENGTH;
+          data[dataLen++] = currentCommand.value ? 0x01 : 0x00;
+        } else if (currentCommand.type == DP_TYPE_VALUE) {
+          data[dataLen++] = 0x00;
+          data[dataLen++] = DP_VALUE_PAYLOAD_LENGTH;
+          data[dataLen++] = (currentCommand.value >> 24) & 0xFF;
+          data[dataLen++] = (currentCommand.value >> 16) & 0xFF;
+          data[dataLen++] = (currentCommand.value >> 8) & 0xFF;
+          data[dataLen++] = currentCommand.value & 0xFF;
+        } else if (currentCommand.type == DP_TYPE_ENUM) {
+          data[dataLen++] = 0x00;
+          data[dataLen++] = DP_ENUM_PAYLOAD_LENGTH;
+          data[dataLen++] = currentCommand.value & 0xFF;
+        }
 
-    if (currentCommand.type == DP_TYPE_BOOL) {
-      data[dataLen++] = 0x00;
-      data[dataLen++] = 0x01;
-      data[dataLen++] = currentCommand.value ? 0x01 : 0x00;
-    } else if (currentCommand.type == DP_TYPE_VALUE) {
-      data[dataLen++] = 0x00;
-      data[dataLen++] = 0x04;
-      data[dataLen++] = (currentCommand.value >> 24) & 0xFF;
-      data[dataLen++] = (currentCommand.value >> 16) & 0xFF;
-      data[dataLen++] = (currentCommand.value >> 8) & 0xFF;
-      data[dataLen++] = currentCommand.value & 0xFF;
-    } else if (currentCommand.type == DP_TYPE_ENUM) {
-      data[dataLen++] = 0x00;
-      data[dataLen++] = 0x01;
-      data[dataLen++] = currentCommand.value & 0xFF;
-    }
+        sendCommand(TUYA_CMD_SEND_COMMAND, data, dataLen);
 
-    sendCommand(TUYA_CMD_SEND_COMMAND, data, dataLen);
+        queueState = CommandQueueState::AWAITING_ACK;
+        commandSentTime = now;
+        currentDpidForStatus = currentCommand.dpid;
 
-    processingCommand = true;
-    awaitingAck = true;
-    awaitingStatus = false;
-    commandSentTime = now;
-    currentDpidForStatus = currentCommand.dpid;
-
-    Log::debug("Sent queued command DPID=%d, awaiting ACK", currentCommand.dpid);
+        Log::debug("Sent queued command DPID=%d, awaiting ACK", currentCommand.dpid);
+      }
+      break;
   }
 }
 
 void TuyaProtocol::clearQueue() {
-  for (int i = 0; i < COMMAND_QUEUE_SIZE; i++) {
-    commandQueue[i].active = false;
-  }
   queueHead = 0;
   queueTail = 0;
   queueCount = 0;
@@ -584,10 +574,8 @@ uint8_t TuyaProtocol::getQueueCount() const {
 
 void TuyaProtocol::handleStatusForQueue(uint8_t dpid, [[maybe_unused]] uint32_t value) {
   // Check if we're waiting for status on a tracked command
-  if (processingCommand && awaitingStatus && dpid == currentDpidForStatus) {
+  if (queueState == CommandQueueState::AWAITING_STATUS && dpid == currentDpidForStatus) {
     Log::debug("Status received for DPID=%d, command confirmed", dpid);
-    processingCommand = false;
-    awaitingAck = false;
-    awaitingStatus = false;
+    queueState = CommandQueueState::IDLE;
   }
 }

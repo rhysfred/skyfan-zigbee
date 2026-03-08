@@ -464,7 +464,8 @@ void setup() {
 
 void loop() {
   // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
-  tuya.update(Zigbee.connected());
+  tuya.setRadioConnected(Zigbee.connected());
+  tuya.update();
 
   // Update button state (non-blocking)
   factoryResetButton.update();

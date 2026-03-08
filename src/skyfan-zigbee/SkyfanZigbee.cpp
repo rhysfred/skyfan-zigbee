@@ -262,13 +262,13 @@ bool SkyfanZigbeeFanControl::reportFanMode() {
   // Build raw ZCL Report Attributes frame to bypass access flag check
   // ZCL Frame: [frame_ctrl][seq_num][cmd_id][attr_id_lo][attr_id_hi][attr_type][attr_value]
   uint8_t zcl_frame[7];
-  zcl_frame[0] = 0x18;  // Frame control: global cmd, server-to-client, disable default response
+  zcl_frame[0] = ZCL_FRAME_CTRL_GLOBAL_TO_CLIENT;
   zcl_frame[1] = 0x00;  // Sequence number (will be filled by stack or ignored)
-  zcl_frame[2] = 0x0A;  // Command ID: Report Attributes
-  zcl_frame[3] = ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID & 0xFF;  // Attribute ID low byte
-  zcl_frame[4] = (ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID >> 8) & 0xFF;  // Attribute ID high byte
-  zcl_frame[5] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;  // Attribute type (0x30)
-  zcl_frame[6] = static_cast<uint8_t>(_current_fan_mode);  // Attribute value
+  zcl_frame[2] = ZCL_CMD_REPORT_ATTRIBUTES;
+  zcl_frame[3] = ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID & 0xFF;
+  zcl_frame[4] = (ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID >> 8) & 0xFF;
+  zcl_frame[5] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;
+  zcl_frame[6] = static_cast<uint8_t>(_current_fan_mode);
 
   esp_zb_apsde_data_req_t req;
   memset(&req, 0, sizeof(req));
@@ -298,15 +298,15 @@ bool SkyfanZigbeeFanControl::reportFanDirection() {
   // ZCL Frame: [frame_ctrl][manuf_lo][manuf_hi][seq_num][cmd_id][attr_id_lo][attr_id_hi][attr_type][attr_value]
   uint8_t direction = confirmedFanDirection;
   uint8_t zcl_frame[9];
-  zcl_frame[0] = 0x1C;  // Frame control: global cmd, server-to-client, disable default response, manufacturer specific
-  zcl_frame[1] = FLS_MANUFACTURER_CODE & 0xFF;  // Manufacturer code low byte
-  zcl_frame[2] = (FLS_MANUFACTURER_CODE >> 8) & 0xFF;  // Manufacturer code high byte
+  zcl_frame[0] = ZCL_FRAME_CTRL_GLOBAL_TO_CLIENT_MANUF;
+  zcl_frame[1] = FLS_MANUFACTURER_CODE & 0xFF;
+  zcl_frame[2] = (FLS_MANUFACTURER_CODE >> 8) & 0xFF;
   zcl_frame[3] = 0x00;  // Sequence number
-  zcl_frame[4] = 0x0A;  // Command ID: Report Attributes
-  zcl_frame[5] = CUSTOM_ATTR_FAN_DIRECTION & 0xFF;  // Attribute ID low byte
-  zcl_frame[6] = (CUSTOM_ATTR_FAN_DIRECTION >> 8) & 0xFF;  // Attribute ID high byte
-  zcl_frame[7] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;  // Attribute type (0x30)
-  zcl_frame[8] = direction;  // Attribute value
+  zcl_frame[4] = ZCL_CMD_REPORT_ATTRIBUTES;
+  zcl_frame[5] = CUSTOM_ATTR_FAN_DIRECTION & 0xFF;
+  zcl_frame[6] = (CUSTOM_ATTR_FAN_DIRECTION >> 8) & 0xFF;
+  zcl_frame[7] = ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM;
+  zcl_frame[8] = direction;
 
   esp_zb_apsde_data_req_t req;
   memset(&req, 0, sizeof(req));
@@ -331,6 +331,11 @@ bool SkyfanZigbeeFanControl::reportFanDirection() {
   return true;
 }
 
+void SkyfanZigbeeFanControl::reportAllAttributes() {
+  reportFanMode();
+  reportFanDirection();
+}
+
 // Confirmed state management
 void SkyfanZigbeeFanControl::confirmFanMode(ZigbeeFanMode mode) {
   confirmedFanMode = mode;
@@ -349,6 +354,11 @@ uint8_t SkyfanZigbeeFanControl::getConfirmedFanDirection() const {
 }
 
 // Rollback to confirmed state and report
+void SkyfanZigbeeFanControl::rollback() {
+  rollbackFanMode();
+  rollbackFanDirection();
+}
+
 void SkyfanZigbeeFanControl::rollbackFanMode() {
   bool setOk = setFanMode(confirmedFanMode);
   bool reportOk = reportFanMode();

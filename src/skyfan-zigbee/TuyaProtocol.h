@@ -28,6 +28,17 @@ using RollbackCallback = std::function<void()>;
 // Queue configuration
 #define COMMAND_QUEUE_SIZE 16
 
+// Command queue state machine
+enum class CommandQueueState {
+  IDLE,            // No command being processed
+  AWAITING_ACK,    // Sent command, waiting for MCU ACK
+  AWAITING_STATUS  // Got ACK, waiting for status confirmation
+};
+
+// Tuya packet structure constants (needed by TuyaMessage struct)
+#define TUYA_HEADER_SIZE           6    // 0x55AA + version + command + length(2)
+#define TUYA_MIN_PACKET_LENGTH     7    // Header + 1 byte checksum minimum
+
 // Queued command structure for the command queue
 struct QueuedCommand {
   uint8_t dpid;
@@ -35,9 +46,8 @@ struct QueuedCommand {
   uint32_t value;
   RollbackCallback rollback;
   bool tracked;           // Wait for status confirmation (1.5s timeout)
-  bool active;            // Slot in use
 
-  QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr), tracked(true), active(false) {}
+  QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr), tracked(true) {}
 };
 
 // Tuya message structure - encapsulates a complete received packet
@@ -47,7 +57,7 @@ struct TuyaMessage {
   uint8_t version;
   uint8_t command;
   uint16_t dataLength;
-  uint8_t* data;                      // Points to raw + 6 (start of data payload)
+  uint8_t* data;                      // Points to raw + TUYA_HEADER_SIZE (start of data payload)
 
   void reset() {
     rawLength = 0;
@@ -58,7 +68,7 @@ struct TuyaMessage {
   }
 
   bool isComplete() const {
-    return rawLength >= 7 && rawLength >= 6 + dataLength + 1;
+    return rawLength >= TUYA_MIN_PACKET_LENGTH && rawLength >= TUYA_HEADER_SIZE + dataLength + 1;
   }
 };
 
@@ -109,6 +119,11 @@ struct TuyaMessage {
 #define NETWORK_STATUS_JOINED_NO_CONN 0x02  // Zigbee joined but not connected to coordinator
 #define NETWORK_STATUS_CONNECTED      0x03  // Zigbee connected to coordinator
 
+// Data point payload lengths
+#define DP_BOOL_PAYLOAD_LENGTH     0x01
+#define DP_VALUE_PAYLOAD_LENGTH    0x04
+#define DP_ENUM_PAYLOAD_LENGTH     0x01
+
 class TuyaProtocol {
 private:
   uint8_t tuyaBuffer[TUYA_BUFFER_SIZE];
@@ -138,10 +153,8 @@ private:
   uint8_t queueCount = 0; // Number of items in queue
 
   // Current command processing state
-  bool processingCommand = false;
+  CommandQueueState queueState = CommandQueueState::IDLE;
   QueuedCommand currentCommand;
-  bool awaitingAck = false;
-  bool awaitingStatus = false;
   unsigned long commandSentTime = 0;
   uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
