@@ -23,6 +23,7 @@
 // === Feature Configuration ===
 #define WITH_LIGHT  // Comment out to disable light functionality
 // #define __DEBUG__   // Comment out to disable debug logging
+#define __BOOT_LOG__  // Comment out to disable boot logging persistence
 
 // === Firmware Version ===
 // Injected at build time by CI; fallback for local builds

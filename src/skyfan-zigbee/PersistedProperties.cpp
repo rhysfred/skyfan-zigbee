@@ -21,7 +21,8 @@
 PersistedProperties::PersistedProperties()
   : _mcuBaudRate(0),
     _powerOnLightState(-1),
-    _powerOnLightColourTemp(-1) {
+    _powerOnLightColourTemp(-1),
+    _bootIdx(0) {
 }
 
 void PersistedProperties::begin() {
@@ -46,6 +47,12 @@ void PersistedProperties::begin() {
   if (prefs.isKey(KEY_PO_LIGHT_TEMP)) {
     _powerOnLightColourTemp = prefs.getUChar(KEY_PO_LIGHT_TEMP, 0);
     Log::debug("Loaded powerOnLightColourTemp from NVS: %d", _powerOnLightColourTemp);
+  }
+
+  // Load boot log index (0 if not set)
+  if (prefs.isKey(KEY_BOOT_IDX)) {
+    _bootIdx = prefs.getUChar(KEY_BOOT_IDX, 0);
+    Log::debug("Loaded bootIdx from NVS: %d", _bootIdx);
   }
 
   prefs.end();
@@ -115,4 +122,67 @@ void PersistedProperties::setPowerOnLightColourTemp(uint8_t temp) {
   }
 
   prefs.end();
+}
+
+// Boot Log - circular buffer write
+void PersistedProperties::writeBootLog(const char* logData) {
+  _bootIdx = (_bootIdx % BOOT_LOG_SLOTS) + 1;
+
+  char key[8];
+  snprintf(key, sizeof(key), "%s%d", KEY_BOOT_PREFIX, _bootIdx);
+
+  if (!prefs.begin(NAMESPACE, false)) {
+    Log::error("Failed to open NVS namespace for writing boot log");
+    return;
+  }
+
+  if (prefs.putString(key, logData) == 0) {
+    Log::error("Failed to write boot log to NVS slot %s", key);
+  } else {
+    Log::info("Boot log written to NVS slot %s", key);
+  }
+
+  if (prefs.putUChar(KEY_BOOT_IDX, _bootIdx) == 0) {
+    Log::error("Failed to write bootIdx to NVS");
+  }
+
+  prefs.end();
+}
+
+// Boot Log - dump all slots in most-recent-first order
+void PersistedProperties::dumpBootLogs() const {
+  if (_bootIdx == 0) {
+    Log::info("No boot logs recorded");
+    return;
+  }
+
+  Log::info("=== Boot Logs (most recent first) ===");
+
+  Preferences readPrefs;
+  if (!readPrefs.begin(NAMESPACE, true)) {
+    Log::error("Failed to open NVS namespace for reading boot logs");
+    return;
+  }
+
+  uint8_t slot = _bootIdx;
+  for (uint8_t i = 0; i < BOOT_LOG_SLOTS; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "%s%d", KEY_BOOT_PREFIX, slot);
+
+    if (readPrefs.isKey(key)) {
+      String logEntry = readPrefs.getString(key, "");
+      if (logEntry.length() > 0) {
+        Log::info("Boot log [%d/%d]%s slot %s: %s",
+                  i + 1, BOOT_LOG_SLOTS,
+                  (i == 0) ? " (most recent)" : "",
+                  key, logEntry.c_str());
+      }
+    }
+
+    // Move to previous slot, wrapping from 1 to BOOT_LOG_SLOTS
+    slot = (slot == 1) ? BOOT_LOG_SLOTS : slot - 1;
+  }
+
+  readPrefs.end();
+  Log::info("=== End Boot Logs ===");
 }

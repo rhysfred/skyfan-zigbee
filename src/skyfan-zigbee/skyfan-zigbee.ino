@@ -374,6 +374,13 @@ void setup() {
     }
   }
 
+#ifdef __BOOT_LOG__
+  if (Log::getBootLog()[0] != '\0') {
+    props.writeBootLog(Log::getBootLog());
+    Log::clearBootLog();
+  }
+#endif
+
   tuya.setDeviceStatusCallback(onDeviceStatus);
 
   // Set Zigbee device name and model
@@ -463,6 +470,15 @@ void setup() {
 }
 
 void loop() {
+#ifdef __BOOT_LOG__
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'b' || c == 'B') {
+      props.dumpBootLogs();
+    }
+  }
+#endif
+
   // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
   tuya.setRadioConnected(Zigbee.connected());
   tuya.update();

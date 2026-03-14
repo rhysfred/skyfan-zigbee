@@ -151,9 +151,11 @@ bool TuyaProtocol::processByte(uint8_t byte) {
   return false;
 }
 
-// Check heartbeat - sends heartbeat and waits for response
-// Returns true if heartbeat response received within timeout
-bool TuyaProtocol::checkHeartbeat() {
+// Check heartbeat - sends heartbeat and waits for first complete packet
+// Captures received bytes for boot log diagnostics. Stops after first
+// complete packet to avoid consuming header bytes of a subsequent packet.
+HeartbeatResult TuyaProtocol::checkHeartbeat() {
+  HeartbeatResult result;
   unsigned long startTime = millis();
 
   // Reset state machine and clear any stale data
@@ -166,24 +168,26 @@ bool TuyaProtocol::checkHeartbeat() {
   // Send heartbeat request
   sendHeartbeat();
 
-  // Wait for response with timeout
+  // Wait for response with timeout - stop after first complete packet
   while ((millis() - startTime) < TUYA_COMMAND_TIMEOUT_MS) {
     if (serial->available()) {
       uint8_t byte = serial->read();
+
+      // Capture byte for diagnostics
+      if (result.rxCount < HeartbeatResult::MAX_RX_CAPTURE) {
+        result.rxBytes[result.rxCount++] = byte;
+      }
+
       if (processByte(byte)) {
-        // Complete packet received - check if heartbeat
-        bool isHeartbeat = (rxMessage.command == TUYA_CMD_HEARTBEAT);
-        // Reset state machine for next packet
+        // First complete packet received - check if heartbeat and stop
+        result.success = (rxMessage.command == TUYA_CMD_HEARTBEAT);
         rxState = TuyaProtocolState::WAIT_HEADER_1;
         rxMessage.reset();
-        if (isHeartbeat) {
-          return true;
-        }
-        // Not heartbeat - keep waiting
+        return result;
       }
     }
   }
-  return false;
+  return result;
 }
 
 int32_t TuyaProtocol::connect(uint32_t baudRate) {
@@ -198,7 +202,11 @@ int32_t TuyaProtocol::connect(uint32_t baudRate) {
     for (uint8_t attempt = 0; attempt < 5; attempt++) {
       Log::debug("Connection attempt %d/5 at %lu baud", attempt + 1, baudRate);
 
-      if (checkHeartbeat()) {
+      HeartbeatResult hbResult = checkHeartbeat();
+      Log::boot(baudRate, tuyaBuffer, HEARTBEAT_PACKET_LENGTH,
+                hbResult.rxBytes, hbResult.rxCount, hbResult.success);
+
+      if (hbResult.success) {
         Log::info("Connection verified at %lu baud", baudRate);
         return baudRate;
       }
@@ -228,7 +236,11 @@ int32_t TuyaProtocol::connect(uint32_t baudRate) {
 
       Log::debug("Trying %lu baud (cycle %d/%d)", rate, cycle + 1, BAUD_NEGOTIATION_MAX_CYCLES);
 
-      if (checkHeartbeat()) {
+      HeartbeatResult hbResult = checkHeartbeat();
+      Log::boot(rate, tuyaBuffer, HEARTBEAT_PACKET_LENGTH,
+                hbResult.rxBytes, hbResult.rxCount, hbResult.success);
+
+      if (hbResult.success) {
         Log::info("Baud rate negotiation successful: %lu baud", rate);
         return rate;
       }

@@ -30,11 +30,15 @@ private:
   static constexpr const char* KEY_MCU_BAUD = "mcuBaud";
   static constexpr const char* KEY_PO_LIGHT_STATE = "poLightState";
   static constexpr const char* KEY_PO_LIGHT_TEMP = "poLightTemp";
+  static constexpr const char* KEY_BOOT_IDX = "bootIdx";
+  static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
+  static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
   // In-memory cache
   uint32_t _mcuBaudRate;           // 0 = not set
   int8_t _powerOnLightState;       // -1 = not set, 0 = off, 1 = on
   int8_t _powerOnLightColourTemp;  // -1 = not set, 0-2 = temp value
+  uint8_t _bootIdx;                // 0 = uninitialised, 1-5 = last written slot
 
 public:
   PersistedProperties();
@@ -52,6 +56,10 @@ public:
   // Power-on Light Colour Temp (returns -1 if not set, 0-2=temp)
   int8_t getPowerOnLightColourTemp() const;
   void setPowerOnLightColourTemp(uint8_t temp);
+
+  // Boot log persistence (circular buffer of BOOT_LOG_SLOTS entries)
+  void writeBootLog(const char* logData);
+  void dumpBootLogs() const;
 };
 
 #endif // PERSISTED_PROPERTIES_H

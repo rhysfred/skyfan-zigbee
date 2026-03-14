@@ -342,7 +342,7 @@ Debug output runs at 9600 baud and can be viewed using the Arduino IDE Serial Mo
 
 ## License
 
-Licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0).
+Licensed under the GNU Lesser General Public Licence v3.0 (LGPL-3.0).
 
 ## Author
 

@@ -124,6 +124,14 @@ struct TuyaMessage {
 #define DP_VALUE_PAYLOAD_LENGTH    0x04
 #define DP_ENUM_PAYLOAD_LENGTH     0x01
 
+// Result from a heartbeat check - captures received bytes for diagnostics
+struct HeartbeatResult {
+  static constexpr uint8_t MAX_RX_CAPTURE = 16;
+  uint8_t rxBytes[MAX_RX_CAPTURE];
+  uint16_t rxCount = 0;
+  bool success = false;
+};
+
 class TuyaProtocol {
 private:
   uint8_t tuyaBuffer[TUYA_BUFFER_SIZE];
@@ -158,11 +166,14 @@ private:
   unsigned long commandSentTime = 0;
   uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
+  // Heartbeat packet length (header + checksum, no data)
+  static constexpr uint8_t HEARTBEAT_PACKET_LENGTH = 7;
+
   // Packet state machine - processes one byte, returns true when packet complete
   bool processByte(uint8_t byte);
 
-  // Helper for connect() - sends heartbeat, returns true if response received
-  bool checkHeartbeat();
+  // Helper for connect() - sends heartbeat, captures response bytes
+  HeartbeatResult checkHeartbeat();
 
 public:
   TuyaProtocol(HardwareSerial* serialInterface);
