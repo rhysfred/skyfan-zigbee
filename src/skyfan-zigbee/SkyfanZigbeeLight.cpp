@@ -85,11 +85,37 @@ uint16_t SkyfanZigbeeLight::getConfirmedColorTemp() const {
   return confirmedColorTemp;
 }
 
+// Direct setters — suppress callback to prevent echo when MCU reports status
+bool SkyfanZigbeeLight::setLightStateDirect(bool on) {
+  _suppressCallback = true;
+  bool result = setLightState(on);
+  _suppressCallback = false;
+  return result;
+}
+
+bool SkyfanZigbeeLight::setLightLevelDirect(uint8_t level) {
+  _suppressCallback = true;
+  bool result = setLightLevel(level);
+  _suppressCallback = false;
+  return result;
+}
+
+bool SkyfanZigbeeLight::setLightColorTemperatureDirect(uint16_t mired) {
+  _suppressCallback = true;
+  bool result = setLightColorTemperature(mired);
+  _suppressCallback = false;
+  return result;
+}
+
+bool SkyfanZigbeeLight::isCallbackSuppressed() const {
+  return _suppressCallback;
+}
+
 // Rollback to confirmed state and report
 void SkyfanZigbeeLight::rollback() {
-  bool stateOk = setLightState(confirmedLightState);
-  bool levelOk = setLightLevel(confirmedLightLevel);
-  bool tempOk = setLightColorTemperature(confirmedColorTemp);
+  bool stateOk = setLightStateDirect(confirmedLightState);
+  bool levelOk = setLightLevelDirect(confirmedLightLevel);
+  bool tempOk = setLightColorTemperatureDirect(confirmedColorTemp);
   bool reportStateOk = reportLightState();
   bool reportLevelOk = reportLightLevel();
   bool reportTempOk = reportLightColorTemp();

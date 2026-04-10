@@ -41,7 +41,7 @@ DebouncedButton factoryResetButton(FACTORY_RESET_BUTTON_PIN);
 LedStatusIndicator statusLed(led);
 
 // Hardware UART for Tuya MCU communication
-HardwareSerial tuyaSerial(0);
+HardwareSerial& tuyaSerial = Serial0;
 
 SkyfanZigbeeFanControl zbFanControl = SkyfanZigbeeFanControl(ZIGBEE_FAN_CONTROL_ENDPOINT);
 #ifdef WITH_LIGHT
@@ -111,13 +111,16 @@ void setFanDirection(uint8_t direction) {
 static bool lightCallbackInitialized = false;  // Skip first callback from initialization
 
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
-  // Skip the first callback which is triggered by initialization
+  // Skip the first callback triggered by initialisation
   // (setLightColorTemperature() call in setup triggers this with stale values)
   if (!lightCallbackInitialized) {
     lightCallbackInitialized = true;
     Log::debug("setLight() skipped - first init callback");
     return;
   }
+
+  // Suppress callback when MCU is reporting status to avoid echo
+  if (zbLight.isCallbackSuppressed()) return;
 
   Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
              ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, on ? 1UL : 0UL);
@@ -239,7 +242,7 @@ void handleFanDirectionStatus(uint32_t value) {
 // Handle light switch status updates from MCU
 void handleLightSwitchStatus(uint32_t value) {
   bool lightOn = (value != 0);
-  if (!zbLight.setLightState(lightOn)) {
+  if (!zbLight.setLightStateDirect(lightOn)) {
     Log::error("Failed to update Zigbee light switch status: %s", lightOn ? "ON" : "OFF");
   } else {
     Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
@@ -258,7 +261,7 @@ void handleLightBrightnessStatus(uint32_t value) {
 
   if (isValidTuyaBrightness(tuyaBrightness)) {
     uint8_t zigbeeBrightness = tuyaBrightnessToZigbee(tuyaBrightness);
-    if (!zbLight.setLightLevel(zigbeeBrightness)) {
+    if (!zbLight.setLightLevelDirect(zigbeeBrightness)) {
       Log::error("Failed to update Zigbee light brightness: %d", zigbeeBrightness);
     } else {
       Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
@@ -282,7 +285,7 @@ void handleLightColourTempStatus(uint32_t value) {
     ColourTempLevel colourLevel = static_cast<ColourTempLevel>(colourTempValue);
     uint16_t colourTempMired = tuyaColourTempToMired(colourLevel);
 
-    if (!zbLight.setLightColorTemperature(colourTempMired)) {
+    if (!zbLight.setLightColorTemperatureDirect(colourTempMired)) {
       Log::error("Failed to update Zigbee light colour temperature: %d mired", colourTempMired);
     } else {
       Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",

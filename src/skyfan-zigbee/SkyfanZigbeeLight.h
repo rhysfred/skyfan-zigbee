@@ -28,6 +28,9 @@ private:
   uint8_t confirmedLightLevel = 127;
   uint16_t confirmedColorTemp = COLOUR_TEMP_WARM_MIRED;
 
+  // Callback suppression flag (prevents echo when MCU reports status)
+  bool _suppressCallback = false;
+
   // Helper to report a single attribute to coordinator
   bool reportAttribute(uint16_t clusterId, uint16_t attributeId);
 
@@ -49,6 +52,14 @@ public:
   bool getConfirmedLightState() const;
   uint8_t getConfirmedLightLevel() const;
   uint16_t getConfirmedColorTemp() const;
+
+  // Direct setters for MCU status updates (suppress callback to avoid echo)
+  bool setLightStateDirect(bool on);
+  bool setLightLevelDirect(uint8_t level);
+  bool setLightColorTemperatureDirect(uint16_t mired);
+
+  // Check if callback is currently suppressed (used by setLight callback)
+  bool isCallbackSuppressed() const;
 
   // Rollback to confirmed state and report to coordinator
   void rollback();
