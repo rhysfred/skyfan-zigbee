@@ -53,7 +53,7 @@
 #define FACTORY_RESET_BUTTON_PIN   BOOT_PIN
 #define DEBUG_SERIAL_RX_PIN        21
 #define DEBUG_SERIAL_TX_PIN        20
-#define DEBUG_SERIAL_BAUD_RATE     9600
+#define DEBUG_SERIAL_BAUD_RATE     115200
 
 // === Zigbee Configuration ===
 #define ZIGBEE_FAN_CONTROL_ENDPOINT    1
