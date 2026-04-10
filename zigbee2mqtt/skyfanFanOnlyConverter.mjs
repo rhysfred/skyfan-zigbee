@@ -1,7 +1,6 @@
 import {access, presets} from "zigbee-herdsman-converters/lib/exposes";
 import * as m from "zigbee-herdsman-converters/lib/modernExtend";
 import * as reporting from "zigbee-herdsman-converters/lib/reporting";
-import * as fz from "zigbee-herdsman-converters/converters/fromZigbee";
 import * as tz from "zigbee-herdsman-converters/converters/toZigbee";
 import * as ota from "zigbee-herdsman-converters/lib/ota";
 import {Zcl} from "zigbee-herdsman";
@@ -15,8 +14,19 @@ const FAN_DIRECTION_ATTR_ID = 0x0001;
 
 const manufacturerOptions = {manufacturerCode: FLS_MANUFACTURER_CODE};
 
-// Custom converters for fan direction manufacturer-specific cluster attribute
+// Custom fromZigbee converters with explicit endpoint suffixes for multi-endpoint state updates
 const fzLocal = {
+    fan_mode: {
+        cluster: "hvacFanCtrl",
+        type: ["attributeReport", "readResponse"],
+        convert: (model, msg, publish, options, meta) => {
+            if (msg.data.fanMode !== undefined) {
+                const fanModeMap = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"};
+                const mode = fanModeMap[msg.data.fanMode] ?? "off";
+                return {fan_mode_fan: mode, fan_state_fan: mode === "off" ? "OFF" : "ON"};
+            }
+        },
+    },
     fan_direction: {
         cluster: "fanExtensions",
         type: ["attributeReport", "readResponse"],
@@ -72,8 +82,8 @@ export default {
         e.enum("fan_direction", access.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction").withEndpoint("fan"),
     ],
 
-    // Include standard fan converters + custom direction converters
-    fromZigbee: [fz.fan, fzLocal.fan_direction],
+    // Custom fromZigbee converters with explicit endpoint suffixes for reliable rollback state updates
+    fromZigbee: [fzLocal.fan_mode, fzLocal.fan_direction],
     toZigbee: [tz.fan_mode, tzLocal.fan_direction],
 
     configure: async (device, coordinatorEndpoint) => {
