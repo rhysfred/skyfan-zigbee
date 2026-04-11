@@ -360,6 +360,10 @@ Licensed under the GNU General Public Licence v3.0 (GPL-3.0).
 **Rhys Frederick** - Front Left Speaker  
 Copyright (c) 2025
 
+## Related Tools
+
+- **[Skyfan MCU Emulator](https://github.com/rhysfred/skyfan-mcu-emulator)** — Desktop GUI app that emulates the Tuya MCU over serial for firmware development and debugging without a physical fan.
+
 ## References
 
 - [ESP32 Zigbee SDK Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/zigbee/index.html)
