@@ -58,6 +58,19 @@ void PersistedProperties::begin() {
   prefs.end();
 }
 
+// NVS write helpers
+bool PersistedProperties::openNvsForWriting() {
+  if (!prefs.begin(NAMESPACE, false)) {
+    Log::error("Failed to open NVS namespace for writing");
+    return false;
+  }
+  return true;
+}
+
+void PersistedProperties::closeNvs() {
+  prefs.end();
+}
+
 // MCU Baud Rate
 uint32_t PersistedProperties::getMcuBaudRate() const {
   return _mcuBaudRate;
@@ -65,11 +78,7 @@ uint32_t PersistedProperties::getMcuBaudRate() const {
 
 void PersistedProperties::setMcuBaudRate(uint32_t baudRate) {
   _mcuBaudRate = baudRate;
-
-  if (!prefs.begin(NAMESPACE, false)) {  // Read-write mode
-    Log::error("Failed to open NVS namespace for writing");
-    return;
-  }
+  if (!openNvsForWriting()) return;
 
   if (prefs.putUInt(KEY_MCU_BAUD, baudRate) == 0) {
     Log::error("Failed to write mcuBaudRate to NVS");
@@ -77,21 +86,17 @@ void PersistedProperties::setMcuBaudRate(uint32_t baudRate) {
     Log::debug("Wrote mcuBaudRate to NVS: %lu", baudRate);
   }
 
-  prefs.end();
+  closeNvs();
 }
 
 void PersistedProperties::clearMcuBaudRate() {
   _mcuBaudRate = 0;
-
-  if (!prefs.begin(NAMESPACE, false)) {
-    Log::error("Failed to open NVS namespace for writing");
-    return;
-  }
+  if (!openNvsForWriting()) return;
 
   prefs.remove(KEY_MCU_BAUD);
   Log::info("Cleared persisted MCU baud rate from NVS");
 
-  prefs.end();
+  closeNvs();
 }
 
 // Power-on Light State
@@ -101,11 +106,7 @@ int8_t PersistedProperties::getPowerOnLightState() const {
 
 void PersistedProperties::setPowerOnLightState(bool state) {
   _powerOnLightState = state ? 1 : 0;
-
-  if (!prefs.begin(NAMESPACE, false)) {
-    Log::error("Failed to open NVS namespace for writing");
-    return;
-  }
+  if (!openNvsForWriting()) return;
 
   if (prefs.putBool(KEY_PO_LIGHT_STATE, state) == 0) {
     Log::error("Failed to write powerOnLightState to NVS");
@@ -113,7 +114,7 @@ void PersistedProperties::setPowerOnLightState(bool state) {
     Log::debug("Wrote powerOnLightState to NVS: %d", state ? 1 : 0);
   }
 
-  prefs.end();
+  closeNvs();
 }
 
 // Power-on Light Colour Temp
@@ -123,11 +124,7 @@ int8_t PersistedProperties::getPowerOnLightColourTemp() const {
 
 void PersistedProperties::setPowerOnLightColourTemp(uint8_t temp) {
   _powerOnLightColourTemp = temp;
-
-  if (!prefs.begin(NAMESPACE, false)) {
-    Log::error("Failed to open NVS namespace for writing");
-    return;
-  }
+  if (!openNvsForWriting()) return;
 
   if (prefs.putUChar(KEY_PO_LIGHT_TEMP, temp) == 0) {
     Log::error("Failed to write powerOnLightColourTemp to NVS");
@@ -135,7 +132,7 @@ void PersistedProperties::setPowerOnLightColourTemp(uint8_t temp) {
     Log::debug("Wrote powerOnLightColourTemp to NVS: %d", temp);
   }
 
-  prefs.end();
+  closeNvs();
 }
 
 // Boot Log - circular buffer write
@@ -145,10 +142,7 @@ void PersistedProperties::writeBootLog(const char* logData) {
   char key[8];
   snprintf(key, sizeof(key), "%s%d", KEY_BOOT_PREFIX, _bootIdx);
 
-  if (!prefs.begin(NAMESPACE, false)) {
-    Log::error("Failed to open NVS namespace for writing boot log");
-    return;
-  }
+  if (!openNvsForWriting()) return;
 
   if (prefs.putString(key, logData) == 0) {
     Log::error("Failed to write boot log to NVS slot %s", key);
@@ -160,7 +154,7 @@ void PersistedProperties::writeBootLog(const char* logData) {
     Log::error("Failed to write bootIdx to NVS");
   }
 
-  prefs.end();
+  closeNvs();
 }
 
 // Boot Log - dump all slots in most-recent-first order

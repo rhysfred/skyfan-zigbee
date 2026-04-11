@@ -63,6 +63,9 @@ public:
 
   // Rollback to confirmed state and report to coordinator
   void rollback();
+
+  // Handle MCU status updates (validates, updates Zigbee attributes, confirms state, reports)
+  void handleStatusUpdate(uint8_t dpid, uint32_t value);
 };
 
 #endif // SKYFAN_ZIGBEE_LIGHT_H

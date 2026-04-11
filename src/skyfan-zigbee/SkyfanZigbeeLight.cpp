@@ -16,6 +16,7 @@
  */
 
 #include "SkyfanZigbeeLight.h"
+#include "TuyaProtocol.h"
 #include "Logger.h"
 
 // Helper to report a single attribute to coordinator
@@ -109,6 +110,74 @@ bool SkyfanZigbeeLight::setLightColorTemperatureDirect(uint16_t mired) {
 
 bool SkyfanZigbeeLight::isCallbackSuppressed() const {
   return _suppressCallback;
+}
+
+// Handle MCU status updates — validates data, updates Zigbee attributes, confirms state, reports to coordinator
+void SkyfanZigbeeLight::handleStatusUpdate(uint8_t dpid, uint32_t value) {
+  switch (dpid) {
+    case DP_LIGHT_SWITCH: {
+      bool lightOn = (value != 0);
+      if (!setLightStateDirect(lightOn)) {
+        Log::error("Failed to update Zigbee light switch status: %s", lightOn ? "ON" : "OFF");
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, lightOn ? 1UL : 0UL);
+      }
+
+      confirmLightState(lightOn);
+      reportLightState();
+      Log::info("Light switch set to %s (%d) by Skyfan", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
+      break;
+    }
+
+    case DP_LIGHT_DIMMER: {
+      uint8_t tuyaBrightness = static_cast<uint8_t>(value);
+      if (!isValidTuyaBrightness(tuyaBrightness)) {
+        Log::error("Invalid light brightness status received: %d", tuyaBrightness);
+        return;
+      }
+
+      uint8_t zigbeeBrightness = tuyaBrightnessToZigbee(tuyaBrightness);
+      if (!setLightLevelDirect(zigbeeBrightness)) {
+        Log::error("Failed to update Zigbee light brightness: %d", zigbeeBrightness);
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, (uint32_t)zigbeeBrightness);
+      }
+
+      confirmLightLevel(zigbeeBrightness);
+      reportLightLevel();
+      Log::info("Light brightness set to %d (Zigbee: %d) by Skyfan", tuyaBrightness, zigbeeBrightness);
+      break;
+    }
+
+    case DP_LIGHT_COLOUR_TEMP: {
+      uint8_t colourTempValue = static_cast<uint8_t>(value);
+      if (colourTempValue > static_cast<uint8_t>(ColourTempLevel::COOL)) {
+        Log::error("Invalid light colour temperature status received: %d", colourTempValue);
+        return;
+      }
+
+      ColourTempLevel colourLevel = static_cast<ColourTempLevel>(colourTempValue);
+      uint16_t colourTempMired = tuyaColourTempToMired(colourLevel);
+
+      if (!setLightColorTemperatureDirect(colourTempMired)) {
+        Log::error("Failed to update Zigbee light colour temperature: %d mired", colourTempMired);
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
+      }
+
+      confirmColorTemp(colourTempMired);
+      reportLightColorTemp();
+      Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
+      break;
+    }
+
+    default:
+      Log::error("Unknown light status update - DPID: %d, Value: %lu", dpid, value);
+      break;
+  }
 }
 
 // Rollback to confirmed state and report

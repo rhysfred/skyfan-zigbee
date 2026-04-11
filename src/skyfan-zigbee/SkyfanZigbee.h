@@ -108,6 +108,9 @@ public:
   void rollbackFanMode();   // Rolls back fan mode only
   void rollbackFanDirection();  // Rolls back fan direction only
 
+  // Handle MCU status updates (validates, updates Zigbee attributes, confirms state, reports)
+  void handleStatusUpdate(uint8_t dpid, uint32_t value);
+
 };
 
 #endif // SKYFAN_ZIGBEE_H

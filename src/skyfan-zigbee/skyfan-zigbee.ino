@@ -152,201 +152,26 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
 }
 #endif
 
-/********************* individual device status handlers **************************/
-
-// Handle fan switch status updates from MCU
-void handleFanSwitchStatus(uint32_t value) {
-  bool fanOn = (value != 0);
-  ZigbeeFanMode mode = fanOn ? FAN_MODE_ON : FAN_MODE_OFF;
-
-  if (!zbFanControl.setFanState(fanOn)) {
-    Log::error("Failed to update Zigbee fan switch status: %s", fanOn ? "ON" : "OFF");
-  } else {
-    Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-               ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
-  }
-
-  // Update confirmed state and report to coordinator
-  zbFanControl.confirmFanMode(mode);
-  zbFanControl.reportFanMode();
-
-  Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
-}
-
-// Handle fan speed status updates from MCU
-void handleFanSpeedStatus(uint32_t value) {
-  uint8_t speed = static_cast<uint8_t>(value);
-  if (isValidTuyaFanSpeed(speed)) {
-    // Calculate the Zigbee fan mode based on speed
-    ZigbeeFanMode mode;
-    switch (speed) {
-      case TUYA_FAN_SPEED_MIN: mode = FAN_MODE_OFF; break;
-      case FAN_SPEED_LOW_TUYA:
-      case FAN_SPEED_LOW_TUYA + 1: mode = FAN_MODE_LOW; break;
-      case FAN_SPEED_MEDIUM_TUYA:
-      case FAN_SPEED_MEDIUM_TUYA + 1: mode = FAN_MODE_MEDIUM; break;
-      case FAN_SPEED_HIGH_TUYA: mode = FAN_MODE_HIGH; break;
-      default: mode = FAN_MODE_ON; break;
-    }
-
-    if (!zbFanControl.setFanSpeed(speed)) {
-      Log::error("Failed to update Zigbee fan speed status: %d", speed);
-    } else {
-      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-                 ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
-    }
-
-    // Update confirmed state and report to coordinator
-    zbFanControl.confirmFanMode(mode);
-    zbFanControl.reportFanMode();
-
-    Log::info("Fan speed set to %d by Skyfan", speed);
-  } else {
-    Log::error("Invalid fan speed status received: %d", speed);
-  }
-}
-
-// Handle fan mode status updates from MCU (MCU-only, not exposed to Zigbee)
-void handleFanModeStatus(uint32_t value) {
-  uint8_t mode = static_cast<uint8_t>(value);
-  if (mode <= static_cast<uint8_t>(TuyaFanMode::SLEEP)) {
-    const char* modeName = (mode == static_cast<uint8_t>(TuyaFanMode::NORMAL)) ? "NORMAL" :
-                           (mode == static_cast<uint8_t>(TuyaFanMode::ECO)) ? "ECO" : "SLEEP";
-    Log::info("Fan MCU mode set to %s (%d) by Skyfan", modeName, mode);
-  } else {
-    Log::error("Invalid fan mode status received: %d", mode);
-  }
-}
-
-// Handle fan direction status updates from MCU
-void handleFanDirectionStatus(uint32_t value) {
-  uint8_t direction = static_cast<uint8_t>(value);
-  if (direction <= static_cast<uint8_t>(FanDirection::REVERSE)) {
-    // Update custom manufacturer attribute for fan direction
-    if (!zbFanControl.setFanDirection(direction)) {
-      Log::error("Failed to update Zigbee fan direction status: %d", direction);
-    } else {
-      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-                 ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
-    }
-
-    // Update confirmed state and report to coordinator
-    zbFanControl.confirmFanDirection(direction);
-    zbFanControl.reportFanDirection();
-
-    Log::info("Fan direction set to %s (%d) by Skyfan",
-      (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
-  } else {
-    Log::error("Invalid fan direction status received: %d", direction);
-  }
-}
-
-#ifdef WITH_LIGHT
-// Handle light switch status updates from MCU
-void handleLightSwitchStatus(uint32_t value) {
-  bool lightOn = (value != 0);
-  if (!zbLight.setLightStateDirect(lightOn)) {
-    Log::error("Failed to update Zigbee light switch status: %s", lightOn ? "ON" : "OFF");
-  } else {
-    Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-               ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, lightOn ? 1UL : 0UL);
-  }
-
-  // Update confirmed state and report to coordinator
-  zbLight.confirmLightState(lightOn);
-  zbLight.reportLightState();
-
-  Log::info("Light switch set to %s (%d) by Skyfan", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
-}
-
-// Handle light brightness status updates from MCU
-void handleLightBrightnessStatus(uint32_t value) {
-  uint8_t tuyaBrightness = static_cast<uint8_t>(value);
-
-  if (isValidTuyaBrightness(tuyaBrightness)) {
-    uint8_t zigbeeBrightness = tuyaBrightnessToZigbee(tuyaBrightness);
-    if (!zbLight.setLightLevelDirect(zigbeeBrightness)) {
-      Log::error("Failed to update Zigbee light brightness: %d", zigbeeBrightness);
-    } else {
-      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-                 ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, (uint32_t)zigbeeBrightness);
-    }
-
-    // Update confirmed state and report to coordinator
-    zbLight.confirmLightLevel(zigbeeBrightness);
-    zbLight.reportLightLevel();
-
-    Log::info("Light brightness set to %d (Zigbee: %d) by Skyfan", tuyaBrightness, zigbeeBrightness);
-  } else {
-    Log::error("Invalid light brightness status received: %d", tuyaBrightness);
-  }
-}
-
-// Handle light colour temperature status updates from MCU
-void handleLightColourTempStatus(uint32_t value) {
-  uint8_t colourTempValue = static_cast<uint8_t>(value);
-
-  if (colourTempValue <= static_cast<uint8_t>(ColourTempLevel::COOL)) {
-    ColourTempLevel colourLevel = static_cast<ColourTempLevel>(colourTempValue);
-    uint16_t colourTempMired = tuyaColourTempToMired(colourLevel);
-
-    if (!zbLight.setLightColorTemperatureDirect(colourTempMired)) {
-      Log::error("Failed to update Zigbee light colour temperature: %d mired", colourTempMired);
-    } else {
-      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-                 ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
-    }
-
-    // Update confirmed state and report to coordinator
-    zbLight.confirmColorTemp(colourTempMired);
-    zbLight.reportLightColorTemp();
-    Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
-  } else {
-    Log::error("Invalid light colour temperature status received: %d", colourTempValue);
-  }
-}
-#endif
-
-// Handle unknown/unsupported status updates from MCU
-void handleUnknownStatus(uint8_t dpid, uint32_t value) {
-  Log::error("Unknown status update - DPID: %d, Value: %lu from Skyfan", dpid, value);
-}
-
-/********************* main device status callback function **************************/
+/********************* device status callback function **************************/
 void onDeviceStatus(uint8_t dpid, uint32_t value) {
   switch (dpid) {
     case DP_FAN_SWITCH:
-      handleFanSwitchStatus(value);
-      break;
-      
     case DP_FAN_SPEED:
-      handleFanSpeedStatus(value);
-      break;
-      
     case DP_FAN_MODE:
-      handleFanModeStatus(value);
-      break;
-      
     case DP_FAN_DIRECTION:
-      handleFanDirectionStatus(value);
+      zbFanControl.handleStatusUpdate(dpid, value);
       break;
-      
+
 #ifdef WITH_LIGHT
     case DP_LIGHT_SWITCH:
-      handleLightSwitchStatus(value);
-      break;
-      
     case DP_LIGHT_DIMMER:
-      handleLightBrightnessStatus(value);
-      break;
-      
     case DP_LIGHT_COLOUR_TEMP:
-      handleLightColourTempStatus(value);
+      zbLight.handleStatusUpdate(dpid, value);
       break;
 #endif
-      
+
     default:
-      handleUnknownStatus(dpid, value);
+      Log::error("Unknown status update - DPID: %d, Value: %lu from Skyfan", dpid, value);
       break;
   }
 }

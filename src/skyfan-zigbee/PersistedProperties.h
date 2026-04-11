@@ -34,6 +34,10 @@ private:
   static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
   static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
+  // NVS write helpers
+  bool openNvsForWriting();
+  void closeNvs();
+
   // In-memory cache
   uint32_t _mcuBaudRate;           // 0 = not set
   int8_t _powerOnLightState;       // -1 = not set, 0 = off, 1 = on

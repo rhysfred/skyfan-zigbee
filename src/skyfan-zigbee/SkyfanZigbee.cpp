@@ -16,6 +16,7 @@
  */
 
 #include "SkyfanZigbee.h"
+#include "TuyaProtocol.h"
 #include "Logger.h"
 
 // Constructor copied from ZigbeeFanControl with modifications for our use case
@@ -371,4 +372,84 @@ void SkyfanZigbeeFanControl::rollbackFanDirection() {
   bool reportOk = reportFanDirection();
   Log::info("Rolled back fan direction to %d (set=%s, report=%s)",
             confirmedFanDirection, setOk ? "ok" : "FAIL", reportOk ? "ok" : "FAIL");
+}
+
+// Handle MCU status updates — validates data, updates Zigbee attributes, confirms state, reports to coordinator
+void SkyfanZigbeeFanControl::handleStatusUpdate(uint8_t dpid, uint32_t value) {
+  switch (dpid) {
+    case DP_FAN_SWITCH: {
+      bool fanOn = (value != 0);
+      ZigbeeFanMode mode = fanOn ? FAN_MODE_ON : FAN_MODE_OFF;
+
+      if (!setFanState(fanOn)) {
+        Log::error("Failed to update Zigbee fan switch status: %s", fanOn ? "ON" : "OFF");
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
+      }
+
+      confirmFanMode(mode);
+      reportFanMode();
+      Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
+      break;
+    }
+
+    case DP_FAN_SPEED: {
+      uint8_t speed = static_cast<uint8_t>(value);
+      if (!isValidTuyaFanSpeed(speed)) {
+        Log::error("Invalid fan speed status received: %d", speed);
+        return;
+      }
+
+      // setFanSpeed handles the speed-to-mode mapping and attribute update
+      if (!setFanSpeed(speed)) {
+        Log::error("Failed to update Zigbee fan speed status: %d", speed);
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)_current_fan_mode);
+      }
+
+      confirmFanMode(_current_fan_mode);
+      reportFanMode();
+      Log::info("Fan speed set to %d by Skyfan", speed);
+      break;
+    }
+
+    case DP_FAN_MODE: {
+      uint8_t mode = static_cast<uint8_t>(value);
+      if (mode <= static_cast<uint8_t>(TuyaFanMode::SLEEP)) {
+        const char* modeName = (mode == static_cast<uint8_t>(TuyaFanMode::NORMAL)) ? "NORMAL" :
+                               (mode == static_cast<uint8_t>(TuyaFanMode::ECO)) ? "ECO" : "SLEEP";
+        Log::info("Fan MCU mode set to %s (%d) by Skyfan", modeName, mode);
+      } else {
+        Log::error("Invalid fan mode status received: %d", mode);
+      }
+      break;
+    }
+
+    case DP_FAN_DIRECTION: {
+      uint8_t direction = static_cast<uint8_t>(value);
+      if (direction > static_cast<uint8_t>(FanDirection::REVERSE)) {
+        Log::error("Invalid fan direction status received: %d", direction);
+        return;
+      }
+
+      if (!setFanDirection(direction)) {
+        Log::error("Failed to update Zigbee fan direction status: %d", direction);
+      } else {
+        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                   _endpoint, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
+      }
+
+      confirmFanDirection(direction);
+      reportFanDirection();
+      Log::info("Fan direction set to %s (%d) by Skyfan",
+        (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
+      break;
+    }
+
+    default:
+      Log::error("Unknown fan status update - DPID: %d, Value: %lu", dpid, value);
+      break;
+  }
 }
