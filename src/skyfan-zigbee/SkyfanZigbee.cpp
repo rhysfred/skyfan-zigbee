@@ -71,7 +71,10 @@ bool SkyfanZigbeeFanControl::setFanModeSequence(ZigbeeFanModeSequence sequence) 
 }
 
 bool SkyfanZigbeeFanControl::setFanMode(ZigbeeFanMode mode) {
-  // Use esp_zb_zcl_set_attribute_val which works after Zigbee.begin()
+  // Always track intended mode (needed for confirmed state even before Zigbee.begin())
+  _current_fan_mode = mode;
+
+  // Update Zigbee attribute (works after Zigbee.begin(), fails silently before)
   esp_zb_zcl_status_t ret = esp_zb_zcl_set_attribute_val(
     _endpoint,
     ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL,
@@ -80,11 +83,7 @@ bool SkyfanZigbeeFanControl::setFanMode(ZigbeeFanMode mode) {
     (void *)&mode,
     false  // Don't check value
   );
-  if (ret == ESP_ZB_ZCL_STATUS_SUCCESS) {
-    _current_fan_mode = mode;
-    return true;
-  }
-  return false;
+  return (ret == ESP_ZB_ZCL_STATUS_SUCCESS);
 }
 
 bool SkyfanZigbeeFanControl::setFanState(bool on) {
@@ -379,16 +378,22 @@ void SkyfanZigbeeFanControl::handleStatusUpdate(uint8_t dpid, uint32_t value) {
   switch (dpid) {
     case DP_FAN_SWITCH: {
       bool fanOn = (value != 0);
-      ZigbeeFanMode mode = fanOn ? FAN_MODE_ON : FAN_MODE_OFF;
 
-      if (!setFanState(fanOn)) {
-        Log::error("Failed to update Zigbee fan switch status: %s", fanOn ? "ON" : "OFF");
+      if (fanOn) {
+        // When turning on, preserve current mode if already set to a specific speed
+        // (speed status may have arrived first and set LOW/MEDIUM/HIGH)
+        if (_current_fan_mode == FAN_MODE_OFF) {
+          setFanMode(FAN_MODE_ON);
+        }
+        // Otherwise keep the existing specific mode (LOW/MEDIUM/HIGH)
       } else {
-        Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
-                   _endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
+        setFanMode(FAN_MODE_OFF);
       }
 
-      confirmFanMode(mode);
+      Log::debug("Read Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
+                 _endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)_current_fan_mode);
+
+      confirmFanMode(_current_fan_mode);
       reportFanMode();
       Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
       break;

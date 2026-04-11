@@ -340,6 +340,10 @@ void TuyaProtocol::sendWorkMode() {
   sendCommand(TUYA_CMD_QUERY_WORK_MODE, &workMode, 1);
 }
 
+void TuyaProtocol::sendDatapointQuery() {
+  sendCommand(TUYA_CMD_DP_QUERY, nullptr, 0);
+}
+
 void TuyaProtocol::setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value)) {
   deviceStatusCallback = callback;
 }
@@ -403,6 +407,7 @@ void TuyaProtocol::processResponse() {
         if (currentCommand.tracked) {
           queueState = CommandQueueState::AWAITING_STATUS;
         } else {
+          lastCommandCompletedTime = millis();
           queueState = CommandQueueState::IDLE;
         }
       }
@@ -501,6 +506,7 @@ void TuyaProtocol::processQueue() {
         }
 
         clearQueue();
+        lastCommandCompletedTime = now;
         queueState = CommandQueueState::IDLE;
       }
       // Still waiting for ACK - don't process further
@@ -515,6 +521,7 @@ void TuyaProtocol::processQueue() {
           currentCommand.rollback();
           rollbackInProgress = false;
         }
+        lastCommandCompletedTime = now;
         queueState = CommandQueueState::IDLE;
         // Don't clear queue - just move to next command
       }
@@ -524,6 +531,10 @@ void TuyaProtocol::processQueue() {
     case CommandQueueState::IDLE:
       // Check if we have commands to process
       if (queueCount > 0) {
+        // Enforce minimum gap between commands so MCU has time to process
+        if (now - lastCommandCompletedTime < TUYA_INTER_COMMAND_DELAY_MS) {
+          return;
+        }
         // Dequeue next command
         currentCommand = commandQueue[queueTail];
         queueTail = (queueTail + 1) % COMMAND_QUEUE_SIZE;
@@ -585,6 +596,7 @@ void TuyaProtocol::handleStatusForQueue(uint8_t dpid, [[maybe_unused]] uint32_t 
   // Check if we're waiting for status on a tracked command
   if (queueState == CommandQueueState::AWAITING_STATUS && dpid == currentDpidForStatus) {
     Log::debug("Status received for DPID=%d, command confirmed", dpid);
+    lastCommandCompletedTime = millis();
     queueState = CommandQueueState::IDLE;
   }
 }

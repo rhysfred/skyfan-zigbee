@@ -68,18 +68,18 @@ void setFan(ZigbeeFanMode mode) {
       Log::info("Fan mode set to OFF (0) by Zigbee");
       break;
     case FAN_MODE_LOW:
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback, false);  // Speed first (untracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
       Log::info("Fan mode set to LOW (1) by Zigbee");
       break;
     case FAN_MODE_MEDIUM:
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, rollback, false);  // Speed first (untracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
       Log::info("Fan mode set to MEDIUM (3) by Zigbee");
       break;
     case FAN_MODE_HIGH:
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback, false);  // Untracked but has rollback
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, rollback, false);  // Speed first (untracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
       Log::info("Fan mode set to HIGH (5) by Zigbee");
       break;
     case FAN_MODE_ON:
@@ -133,18 +133,18 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
   // Rollback callback - TuyaProtocol handles re-entry guard and MCU responding check
   auto rollback = []() { zbLight.rollback(); };
 
-  // Queue switch command with rollback
-  tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, on ? 1 : 0, rollback);
-
   if (on) {
     // Convert Zigbee brightness (0-254) to Tuya brightness (0-5)
     uint8_t tuyaBrightness = zigbeeBrightnessToTuya(level);
     // Convert mired to Tuya colour temp values
     ColourTempLevel tuyaColourTemp = miredToTuyaColourTemp(colourTempMired);
 
-    // Queue brightness and colour temp without tracking (switch tracks the operation)
-    tuya.queueCommand(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness, nullptr, false);
+    // Set values BEFORE switching on so MCU has correct state when it powers on
     tuya.queueCommand(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp), nullptr, false);
+    tuya.queueCommand(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness, nullptr, false);
+    tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON last (tracked)
+  } else {
+    tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, 0, rollback);
   }
 
   Log::info("Light set to %s, level %d, temp %d mired (%dK) by Zigbee",
@@ -215,7 +215,17 @@ void setup() {
   }
 #endif
 
+  // Register status callback early so datapoint query responses are handled
   tuya.setDeviceStatusCallback(onDeviceStatus);
+
+  // Query MCU for current datapoint values (populates confirmed state)
+  delay(50);
+  tuya.sendDatapointQuery();
+  unsigned long queryStart = millis();
+  while (millis() - queryStart < 500) {
+    tuya.processResponse();
+    delay(5);
+  }
 
   // Set Zigbee device name and model
   zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);

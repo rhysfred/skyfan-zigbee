@@ -83,6 +83,7 @@ struct TuyaMessage {
 #define TUYA_CMD_RESET_WIFI 0x04
 #define TUYA_CMD_SEND_COMMAND 0x06
 #define TUYA_CMD_STATUS_REPORT 0x07
+#define TUYA_CMD_DP_QUERY 0x08
 
 // Fan Control Data Points (DPIDs)
 #define DP_FAN_SWITCH 1       // Boolean: Fan on/off
@@ -164,6 +165,7 @@ private:
   CommandQueueState queueState = CommandQueueState::IDLE;
   QueuedCommand currentCommand;
   unsigned long commandSentTime = 0;
+  unsigned long lastCommandCompletedTime = 0;
   uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
   // Heartbeat packet length (header + checksum, no data)
@@ -195,6 +197,7 @@ public:
   void sendNetworkStatus(uint8_t status);
   void sendProductInfo();
   void sendWorkMode();
+  void sendDatapointQuery();
 
   // Status functions
   bool isConnected() const;
