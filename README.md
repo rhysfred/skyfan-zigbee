@@ -109,6 +109,9 @@ skyfan-zigbee/
 │   └── ota-index.json             # OTA firmware index for Zigbee2MQTT (auto-updated on release)
 ├── electronics/
 │   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
+│   ├── SkyFanController.brd       # Eagle board layout
+│   ├── SkyFanController.sch       # Eagle schematic
+│   ├── SkyfanController.f3z       # Fusion 360 design archive
 │   └── README.md                  # Electronics design documentation
 ├── README.md                      # Project documentation and setup instructions
 └── LICENCE.md                     # GNU General Public License v3.0 terms and conditions
@@ -142,7 +145,7 @@ skyfan-zigbee/
 
 2. **Configure Arduino IDE**:
    - Install ESP32 board package by Expressif (v3.3.5 or later)
-   - Select your ESP32C6 board e.g. "XAIO_ESP32C6" or "Adafruit Feather ESP32-C6". If using a board other than the XAIO one, double-check the pinouts in this sketch
+   - Select your ESP32C6 board e.g. "XIAO_ESP32C6" or "Adafruit Feather ESP32-C6". If using a board other than the XIAO one, double-check the pinouts in this sketch
    - Set "Partition Scheme" to "Zigbee ZCZR 4MB with spiffs"
    - Set "Zigbee Mode" to "Zigbee ZCZR (coordinator/router)"
 
@@ -195,12 +198,14 @@ class SkyfanZigbeeFanControl : public ZigbeeEP {
   // - Raw APS reporting (bypasses attribute access flag limitations)
   // - Custom manufacturer cluster for fan direction
   // - Confirmed state tracking with rollback on MCU failure
+  // - MCU status update handling (validates, updates attributes, reports)
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
   bool setFanSpeed(uint8_t speed);
   bool reportFanMode();         // Uses raw APS for reliable reporting
   bool reportFanDirection();    // Uses raw APS for reliable reporting
   void reportAllAttributes();   // Reports all attributes to coordinator
+  void handleStatusUpdate();    // Processes MCU status updates for fan DPIDs
   void rollback();              // Reverts to last MCU-confirmed state
 };
 ```
@@ -338,11 +343,17 @@ Debug output is available via the USB-C connector using the built-in Serial inte
 
 **Enhanced Protocol Debug**: For detailed MCU and Zigbee protocol traces, uncomment `// #define __DEBUG__` in `SkyfanConfig.h` before compilation.
 
-Debug output runs at 9600 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program. Note yet to test that the usb-c port can be used at the same time that the adaptor is plugged into the fan.
+Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial Monitor or any terminal program. Note yet to test that the usb-c port can be used at the same time that the adaptor is plugged into the fan.
+
+### Serial Debug Commands
+While connected to the debug serial port, the following single-character commands are available:
+
+- **`r`** / **`R`**: Clear the persisted MCU baud rate from NVS. The baud rate will be re-negotiated on next boot.
+- **`b`** / **`B`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
 
 ## License
 
-Licensed under the GNU Lesser General Public Licence v3.0 (LGPL-3.0).
+Licensed under the GNU General Public Licence v3.0 (GPL-3.0).
 
 ## Author
 
