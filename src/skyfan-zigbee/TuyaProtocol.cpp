@@ -133,7 +133,7 @@ bool TuyaProtocol::processByte(uint8_t byte) {
     case TuyaProtocolState::WAIT_DATA_AND_CHECKSUM:
       if (rxMessage.isComplete()) {
         // Validate checksum before accepting packet
-        uint8_t expectedChecksum = calculateChecksum(rxMessage.raw + 2, rxMessage.rawLength - 3);
+        uint8_t expectedChecksum = calculateChecksum(rxMessage.raw, rxMessage.rawLength - 1);
         uint8_t receivedChecksum = rxMessage.raw[rxMessage.rawLength - 1];
         if (expectedChecksum != receivedChecksum) {
           Log::error("Checksum mismatch: expected 0x%02X, got 0x%02X", expectedChecksum, receivedChecksum);
@@ -312,7 +312,7 @@ void TuyaProtocol::sendCommand(uint8_t cmd, uint8_t* data, uint16_t len) {
     idx += len;
   }
   
-  uint8_t checksum = calculateChecksum(&packet[2], idx - 2);
+  uint8_t checksum = calculateChecksum(packet, idx);
   packet[idx++] = checksum;
   
   debugLogPacket("Write", packet, idx);
@@ -417,9 +417,6 @@ void TuyaProtocol::processResponse() {
       sendProductInfo();
     } else if (rxMessage.command == TUYA_CMD_QUERY_WORK_MODE) {
       sendWorkMode();
-    } else if (rxMessage.command == TUYA_CMD_NETWORK_STATUS) {
-      uint8_t status = radioConnected ? NETWORK_STATUS_CONNECTED : NETWORK_STATUS_NOT_JOINED;
-      sendNetworkStatus(status);
     }
 
     // Log received packet and reset state machine
