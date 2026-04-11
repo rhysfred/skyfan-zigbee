@@ -48,6 +48,7 @@ public:
   // MCU Baud Rate (returns 0 if not set)
   uint32_t getMcuBaudRate() const;
   void setMcuBaudRate(uint32_t baudRate);
+  void clearMcuBaudRate();
 
   // Power-on Light State (returns -1 if not set, 0=off, 1=on)
   int8_t getPowerOnLightState() const;

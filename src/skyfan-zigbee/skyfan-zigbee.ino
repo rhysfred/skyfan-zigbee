@@ -479,14 +479,18 @@ void setup() {
 }
 
 void loop() {
-#ifdef __BOOT_LOG__
   if (Serial.available()) {
     char c = Serial.read();
+    if (c == 'r' || c == 'R') {
+      props.clearMcuBaudRate();
+      Log::info("MCU baud rate will be re-negotiated on next boot");
+    }
+#ifdef __BOOT_LOG__
     if (c == 'b' || c == 'B') {
       props.dumpBootLogs();
     }
-  }
 #endif
+  }
 
   // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
   tuya.setRadioConnected(Zigbee.connected());

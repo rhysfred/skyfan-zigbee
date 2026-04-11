@@ -80,6 +80,20 @@ void PersistedProperties::setMcuBaudRate(uint32_t baudRate) {
   prefs.end();
 }
 
+void PersistedProperties::clearMcuBaudRate() {
+  _mcuBaudRate = 0;
+
+  if (!prefs.begin(NAMESPACE, false)) {
+    Log::error("Failed to open NVS namespace for writing");
+    return;
+  }
+
+  prefs.remove(KEY_MCU_BAUD);
+  Log::info("Cleared persisted MCU baud rate from NVS");
+
+  prefs.end();
+}
+
 // Power-on Light State
 int8_t PersistedProperties::getPowerOnLightState() const {
   return _powerOnLightState;
