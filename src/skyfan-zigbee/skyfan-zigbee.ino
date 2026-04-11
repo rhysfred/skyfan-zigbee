@@ -166,8 +166,9 @@ void handleFanSwitchStatus(uint32_t value) {
                ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
   }
 
-  // Update confirmed state in Zigbee class
+  // Update confirmed state and report to coordinator
   zbFanControl.confirmFanMode(mode);
+  zbFanControl.reportFanMode();
 
   Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
 }
@@ -195,8 +196,9 @@ void handleFanSpeedStatus(uint32_t value) {
                  ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
     }
 
-    // Update confirmed state in Zigbee class
+    // Update confirmed state and report to coordinator
     zbFanControl.confirmFanMode(mode);
+    zbFanControl.reportFanMode();
 
     Log::info("Fan speed set to %d by Skyfan", speed);
   } else {
@@ -228,8 +230,9 @@ void handleFanDirectionStatus(uint32_t value) {
                  ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
     }
 
-    // Update confirmed state in Zigbee class
+    // Update confirmed state and report to coordinator
     zbFanControl.confirmFanDirection(direction);
+    zbFanControl.reportFanDirection();
 
     Log::info("Fan direction set to %s (%d) by Skyfan",
       (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
@@ -249,8 +252,9 @@ void handleLightSwitchStatus(uint32_t value) {
                ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, lightOn ? 1UL : 0UL);
   }
 
-  // Update confirmed state in Zigbee class
+  // Update confirmed state and report to coordinator
   zbLight.confirmLightState(lightOn);
+  zbLight.reportLightState();
 
   Log::info("Light switch set to %s (%d) by Skyfan", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
 }
@@ -268,8 +272,9 @@ void handleLightBrightnessStatus(uint32_t value) {
                  ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, (uint32_t)zigbeeBrightness);
     }
 
-    // Update confirmed state in Zigbee class
+    // Update confirmed state and report to coordinator
     zbLight.confirmLightLevel(zigbeeBrightness);
+    zbLight.reportLightLevel();
 
     Log::info("Light brightness set to %d (Zigbee: %d) by Skyfan", tuyaBrightness, zigbeeBrightness);
   } else {
@@ -292,8 +297,9 @@ void handleLightColourTempStatus(uint32_t value) {
                  ZIGBEE_LIGHT_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, (uint32_t)colourTempMired);
     }
 
-    // Update confirmed state in Zigbee class
+    // Update confirmed state and report to coordinator
     zbLight.confirmColorTemp(colourTempMired);
+    zbLight.reportLightColorTemp();
     Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
   } else {
     Log::error("Invalid light colour temperature status received: %d", colourTempValue);
