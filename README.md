@@ -6,7 +6,7 @@ A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting
 
 This project implements a Zigbee interface for Ventair Skyfan ceiling fans that use Tuya MCU controllers. It provides bidirectional communication between the Zigbee network and the fan's MCU, enabling control and status reporting for both fan and integrated lighting functions.
 
-**Status**: Active development. Hardware integration testing in progress. Should you try this? Probably not just yet.
+**Status**: Version 1.0.0. Tested with a Skyfan DC with Light.
 
 ## Features
 
@@ -236,7 +236,6 @@ Before compiling, configure the target device type in `SkyfanConfig.h`:
 
 ### Serial Protocol
 - **Heartbeat**: 10-second intervals
-- **ACK Timeout**: 500ms for command acknowledgement
 - **Status Timeout**: 1.5 seconds for MCU status confirmation
 - **Buffer Size**: 256 bytes for frame processing
 
@@ -349,6 +348,7 @@ Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial 
 While connected to the debug serial port, the following single-character commands are available:
 
 - **`r`** / **`R`**: Clear the persisted MCU baud rate from NVS. The baud rate will be re-negotiated on next boot.
+- **`p`** / **`P`**: Display the stored product ID from NVS (parsed from MCU init sequence).
 - **`b`** / **`B`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
 
 ## License
