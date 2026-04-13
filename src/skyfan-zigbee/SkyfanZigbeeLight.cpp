@@ -137,6 +137,17 @@ void SkyfanZigbeeLight::handleStatusUpdate(uint8_t dpid, uint32_t value) {
         return;
       }
 
+      // Ignore brightness 0 — the MCU reports 0 as part of turning off and
+      // transiently when turning on before the dimmer command arrives.
+      // The switch DPID is the authoritative on/off signal; brightness 0 is
+      // never a meaningful user-facing value. Preserving the last non-zero
+      // level prevents sending brightness 0 on the next ON command, which would
+      // cause the MCU to turn on at zero brightness and immediately switch off.
+      if (tuyaBrightness == 0) {
+        Log::debug("Ignoring brightness 0 status from MCU");
+        return;
+      }
+
       uint8_t zigbeeBrightness = tuyaBrightnessToZigbee(tuyaBrightness);
       if (!setLightLevelDirect(zigbeeBrightness)) {
         Log::error("Failed to update Zigbee light brightness: %d", zigbeeBrightness);

@@ -62,9 +62,10 @@ static void debugLogPacket([[maybe_unused]] const char* direction, [[maybe_unuse
 TuyaProtocol::TuyaProtocol(HardwareSerial* serialInterface)
   : lastHeartbeat(0), tuyaConnected(false), deviceStatusCallback(nullptr), serial(serialInterface),
     rxState(TuyaProtocolState::WAIT_HEADER_1),
-    mcuNotResponding(false), mcuNotRespondingSince(0), radioConnected(false),
+    radioConnected(false),
     queueHead(0), queueTail(0), queueCount(0),
-    queueState(CommandQueueState::IDLE), commandSentTime(0), currentDpidForStatus(0) {
+    queueState(CommandQueueState::IDLE), commandSentTime(0) {
+  _productId[0] = '\0';
   rxMessage.reset();
 }
 
@@ -151,9 +152,10 @@ bool TuyaProtocol::processByte(uint8_t byte) {
   return false;
 }
 
-// Check heartbeat - sends heartbeat and waits for first complete packet
-// Captures received bytes for boot log diagnostics. Stops after first
-// complete packet to avoid consuming header bytes of a subsequent packet.
+// Check heartbeat - sends heartbeat and waits for a heartbeat response
+// Captures received bytes for boot log diagnostics. Skips non-heartbeat
+// packets (product info, stale status reports) and keeps looking until
+// a heartbeat response arrives or the timeout expires.
 HeartbeatResult TuyaProtocol::checkHeartbeat() {
   HeartbeatResult result;
   unsigned long startTime = millis();
@@ -179,11 +181,15 @@ HeartbeatResult TuyaProtocol::checkHeartbeat() {
       }
 
       if (processByte(byte)) {
-        // First complete packet received - check if heartbeat and stop
-        result.success = (rxMessage.command == TUYA_CMD_HEARTBEAT);
+        if (rxMessage.command == TUYA_CMD_HEARTBEAT) {
+          result.success = true;
+          rxState = TuyaProtocolState::WAIT_HEADER_1;
+          rxMessage.reset();
+          return result;
+        }
+        // Non-heartbeat packet received — reset and keep looking
         rxState = TuyaProtocolState::WAIT_HEADER_1;
         rxMessage.reset();
-        return result;
       }
     }
   }
@@ -344,6 +350,49 @@ void TuyaProtocol::sendDatapointQuery() {
   sendCommand(TUYA_CMD_DP_QUERY, nullptr, 0);
 }
 
+const char* TuyaProtocol::getProductId() const {
+  return _productId;
+}
+
+void TuyaProtocol::parseProductInfo(uint8_t* data, uint16_t len) {
+  // Search for "p":"<value>" in the JSON payload
+  const char* json = reinterpret_cast<const char*>(data);
+  const char* key = "\"p\":\"";
+  const uint16_t keyLen = 5;
+  const char* found = nullptr;
+
+  // Manual search within bounded length (data is not null-terminated)
+  for (uint16_t i = 0; i + keyLen <= len; i++) {
+    if (memcmp(json + i, key, keyLen) == 0) {
+      found = json + i + keyLen;
+      break;
+    }
+  }
+
+  if (!found) {
+    Log::debug("Product info JSON does not contain product ID");
+    return;
+  }
+
+  // Find closing quote within remaining data
+  uint16_t remaining = len - (found - json);
+  uint16_t valueLen = 0;
+  while (valueLen < remaining && found[valueLen] != '"') {
+    valueLen++;
+  }
+
+  // Reject if no closing quote found, or value is empty or too long for our buffer
+  if (valueLen == remaining || valueLen == 0 || valueLen >= sizeof(_productId)) {
+    Log::debug("Product info: invalid or missing product ID value");
+    return;
+  }
+
+  memcpy(_productId, found, valueLen);
+  _productId[valueLen] = '\0';
+
+  Log::debug("Parsed product ID: %s", _productId);
+}
+
 void TuyaProtocol::setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value)) {
   deviceStatusCallback = callback;
 }
@@ -402,23 +451,15 @@ void TuyaProtocol::processResponse() {
         }
       }
     } else if (rxMessage.command == TUYA_CMD_SEND_COMMAND) {
-      if (queueState == CommandQueueState::AWAITING_ACK) {
-        Log::debug("ACK received for DPID=%d", currentDpidForStatus);
-        if (currentCommand.tracked) {
-          queueState = CommandQueueState::AWAITING_STATUS;
-        } else {
-          lastCommandCompletedTime = millis();
-          queueState = CommandQueueState::IDLE;
-        }
-      }
+      // ACK ignored - we wait for status report (0x07) like ESPHome
     } else if (rxMessage.command == TUYA_CMD_HEARTBEAT) {
       tuyaConnected = true;
       lastHeartbeat = millis();
-      if (mcuNotResponding) {
-        mcuNotResponding = false;
-        Log::debug("MCU not responding flag cleared by heartbeat");
-      }
     } else if (rxMessage.command == TUYA_CMD_PRODUCT_INFO) {
+      if (rxMessage.dataLength > 0) {
+        // MCU sent its product info (response to our query, or MCU-initiated)
+        parseProductInfo(rxMessage.data, rxMessage.dataLength);
+      }
       sendProductInfo();
     } else if (rxMessage.command == TUYA_CMD_QUERY_WORK_MODE) {
       sendWorkMode();
@@ -435,36 +476,31 @@ bool TuyaProtocol::isConnected() const {
   return tuyaConnected;
 }
 
-bool TuyaProtocol::isMcuResponding() {
-  // If flag is set, check if 2 seconds have elapsed to reset it
-  if (mcuNotResponding) {
-    if (millis() - mcuNotRespondingSince >= MCU_NOT_RESPONDING_BYPASS_MS) {
-      mcuNotResponding = false;
-      Log::debug("MCU not responding flag reset after 2s timeout");
-    }
-  }
-  return !mcuNotResponding;
-}
-
 // =============================================================================
 // Command Queue Implementation
 // =============================================================================
 
 bool TuyaProtocol::queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
-                                 RollbackCallback rollback, bool tracked) {
+                                 RollbackCallback rollback) {
   // Prevent re-entrant queueing during rollback (e.g., if Zigbee callback fires)
   if (rollbackInProgress) {
     Log::debug("Ignoring command during rollback DPID=%d", dpid);
     return false;
   }
 
-  // If MCU not responding, trigger immediate rollback instead of queueing
-  if (!isMcuResponding() && rollback) {
-    Log::error("MCU not responding - triggering immediate rollback for DPID=%d", dpid);
-    rollbackInProgress = true;
-    rollback();
-    rollbackInProgress = false;
-    return false;
+  // Update existing queued command for same DPID in-place (latest value wins)
+  for (uint8_t i = 0; i < queueCount; i++) {
+    uint8_t idx = (queueTail + i) % COMMAND_QUEUE_SIZE;
+    if (commandQueue[idx].dpid == dpid) {
+      commandQueue[idx].type = type;
+      commandQueue[idx].value = value;
+      if (rollback) {
+        commandQueue[idx].rollback = rollback;
+      }
+      Log::debug("Updated queued command DPID=%d, value=%lu (queue size: %d)",
+                 dpid, value, queueCount);
+      return true;
+    }
   }
 
   if (queueCount >= COMMAND_QUEUE_SIZE) {
@@ -477,13 +513,12 @@ bool TuyaProtocol::queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
   cmd.type = type;
   cmd.value = value;
   cmd.rollback = rollback;
-  cmd.tracked = tracked;
 
   queueHead = (queueHead + 1) % COMMAND_QUEUE_SIZE;
   queueCount++;
 
-  Log::debug("Queued command DPID=%d, type=%d, value=%lu, tracked=%d (queue size: %d)",
-             dpid, type, value, tracked, queueCount);
+  Log::debug("Queued command DPID=%d, type=%d, value=%lu (queue size: %d)",
+             dpid, type, value, queueCount);
 
   return true;
 }
@@ -492,38 +527,19 @@ void TuyaProtocol::processQueue() {
   unsigned long now = millis();
 
   switch (queueState) {
-    case CommandQueueState::AWAITING_ACK:
-      if (now - commandSentTime >= TUYA_COMMAND_TIMEOUT_MS) {
-        // ACK timeout - invoke rollback, set mcuNotResponding, clear queue
-        Log::error("ACK timeout for DPID=%d - MCU not responding, rolling back", currentCommand.dpid);
-        mcuNotResponding = true;
-        mcuNotRespondingSince = now;
-
-        if (currentCommand.rollback) {
-          rollbackInProgress = true;
-          currentCommand.rollback();
-          rollbackInProgress = false;
-        }
-
-        clearQueue();
-        lastCommandCompletedTime = now;
-        queueState = CommandQueueState::IDLE;
-      }
-      // Still waiting for ACK - don't process further
-      return;
-
     case CommandQueueState::AWAITING_STATUS:
       if (now - commandSentTime >= TUYA_STATUS_RESPONSE_TIMEOUT_MS) {
-        // Status timeout - invoke rollback
-        Log::error("Status timeout for DPID=%d - rolling back", currentCommand.dpid);
+        // Status timeout - invoke rollback if present, otherwise just move on
         if (currentCommand.rollback) {
+          Log::error("Status timeout for DPID=%d - rolling back", currentCommand.dpid);
           rollbackInProgress = true;
           currentCommand.rollback();
           rollbackInProgress = false;
+        } else {
+          Log::debug("Status timeout for DPID=%d - no rollback, continuing", currentCommand.dpid);
         }
         lastCommandCompletedTime = now;
         queueState = CommandQueueState::IDLE;
-        // Don't clear queue - just move to next command
       }
       // Still waiting for status - don't process further
       return;
@@ -566,11 +582,9 @@ void TuyaProtocol::processQueue() {
 
         sendCommand(TUYA_CMD_SEND_COMMAND, data, dataLen);
 
-        queueState = CommandQueueState::AWAITING_ACK;
+        queueState = CommandQueueState::AWAITING_STATUS;
         commandSentTime = now;
-        currentDpidForStatus = currentCommand.dpid;
-
-        Log::debug("Sent queued command DPID=%d, awaiting ACK", currentCommand.dpid);
+        Log::debug("Sent queued command DPID=%d, awaiting status", currentCommand.dpid);
       }
       break;
   }
@@ -593,9 +607,8 @@ uint8_t TuyaProtocol::getQueueCount() const {
 }
 
 void TuyaProtocol::handleStatusForQueue(uint8_t dpid, [[maybe_unused]] uint32_t value) {
-  // Check if we're waiting for status on a tracked command
-  if (queueState == CommandQueueState::AWAITING_STATUS && dpid == currentDpidForStatus) {
-    Log::debug("Status received for DPID=%d, command confirmed", dpid);
+  if (queueState == CommandQueueState::AWAITING_STATUS && dpid == currentCommand.dpid) {
+    Log::debug("Status confirmed for DPID=%d", dpid);
     lastCommandCompletedTime = millis();
     queueState = CommandQueueState::IDLE;
   }

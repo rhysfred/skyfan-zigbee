@@ -68,18 +68,18 @@ void setFan(ZigbeeFanMode mode) {
       Log::info("Fan mode set to OFF (0) by Zigbee");
       break;
     case FAN_MODE_LOW:
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback, false);  // Speed first (untracked)
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback);
       Log::info("Fan mode set to LOW (1) by Zigbee");
       break;
     case FAN_MODE_MEDIUM:
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, rollback, false);  // Speed first (untracked)
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_MEDIUM_TUYA, rollback);
       Log::info("Fan mode set to MEDIUM (3) by Zigbee");
       break;
     case FAN_MODE_HIGH:
-      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, rollback, false);  // Speed first (untracked)
-      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON second (tracked)
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_HIGH_TUYA, rollback);
       Log::info("Fan mode set to HIGH (5) by Zigbee");
       break;
     case FAN_MODE_ON:
@@ -139,10 +139,10 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
     // Convert mired to Tuya colour temp values
     ColourTempLevel tuyaColourTemp = miredToTuyaColourTemp(colourTempMired);
 
-    // Set values BEFORE switching on so MCU has correct state when it powers on
-    tuya.queueCommand(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp), nullptr, false);
-    tuya.queueCommand(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness, nullptr, false);
-    tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, 1, rollback);  // Switch ON last (tracked)
+    // Switch on first so light responds immediately; adjust values after
+    tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, 1, rollback);
+    tuya.queueCommand(DP_LIGHT_COLOUR_TEMP, DP_TYPE_ENUM, static_cast<uint8_t>(tuyaColourTemp));
+    tuya.queueCommand(DP_LIGHT_DIMMER, DP_TYPE_VALUE, tuyaBrightness);
   } else {
     tuya.queueCommand(DP_LIGHT_SWITCH, DP_TYPE_BOOL, 0, rollback);
   }
@@ -227,6 +227,20 @@ void setup() {
     delay(5);
   }
 
+  // Persist product ID if received during MCU init sequence, otherwise log previously stored value
+  const char* productId = tuya.getProductId();
+  if (productId[0] != '\0') {
+    props.setProductId(productId);
+    Log::info("Product ID: %s", productId);
+  } else {
+    const char* stored = props.getProductId();
+    if (stored[0] != '\0') {
+      Log::info("Product ID (from NVS): %s", stored);
+    } else {
+      Log::info("Product ID: not available");
+    }
+  }
+
   // Set Zigbee device name and model
   zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);
 
@@ -294,6 +308,7 @@ void setup() {
     if (factoryResetButton.wasLongPressed()) {
       Serial.println();
       Log::info("Factory reset requested during connection");
+      props.clearAll();
       cleanupAllResources();
       delay(FACTORY_RESET_DELAY_MS);
       Zigbee.factoryReset();
@@ -320,6 +335,14 @@ void loop() {
       props.clearMcuBaudRate();
       Log::info("MCU baud rate will be re-negotiated on next boot");
     }
+    if (c == 'p' || c == 'P') {
+      const char* id = props.getProductId();
+      if (id[0] != '\0') {
+        Log::info("Product ID: %s", id);
+      } else {
+        Log::info("Product ID: not set");
+      }
+    }
 #ifdef __BOOT_LOG__
     if (c == 'b' || c == 'B') {
       props.dumpBootLogs();
@@ -344,6 +367,7 @@ void loop() {
       Log::error("OTA in progress - factory reset blocked");
     } else {
       Log::info("Factory reset requested - rebooting in 1s");
+      props.clearAll();
       cleanupAllResources();
       delay(FACTORY_RESET_DELAY_MS);
       Zigbee.factoryReset();

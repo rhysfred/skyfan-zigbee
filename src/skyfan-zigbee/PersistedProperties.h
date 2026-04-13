@@ -32,6 +32,7 @@ private:
   static constexpr const char* KEY_PO_LIGHT_TEMP = "poLightTemp";
   static constexpr const char* KEY_BOOT_IDX = "bootIdx";
   static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
+  static constexpr const char* KEY_PRODUCT_ID = "productId";
   static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
   // NVS write helpers
@@ -43,11 +44,13 @@ private:
   int8_t _powerOnLightState;       // -1 = not set, 0 = off, 1 = on
   int8_t _powerOnLightColourTemp;  // -1 = not set, 0-2 = temp value
   uint8_t _bootIdx;                // 0 = uninitialised, 1-5 = last written slot
+  char _productId[32];             // Empty string = not set
 
 public:
   PersistedProperties();
 
-  void begin();  // Load from NVS into cache
+  void begin();   // Load from NVS into cache
+  void clearAll();  // Erase entire NVS namespace and reset cache
 
   // MCU Baud Rate (returns 0 if not set)
   uint32_t getMcuBaudRate() const;
@@ -61,6 +64,10 @@ public:
   // Power-on Light Colour Temp (returns -1 if not set, 0-2=temp)
   int8_t getPowerOnLightColourTemp() const;
   void setPowerOnLightColourTemp(uint8_t temp);
+
+  // Product ID (returns empty string if not set)
+  const char* getProductId() const;
+  void setProductId(const char* id);
 
   // Boot log persistence (circular buffer of BOOT_LOG_SLOTS entries)
   void writeBootLog(const char* logData);

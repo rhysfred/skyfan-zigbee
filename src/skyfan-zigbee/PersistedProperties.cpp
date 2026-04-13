@@ -23,6 +23,7 @@ PersistedProperties::PersistedProperties()
     _powerOnLightState(-1),
     _powerOnLightColourTemp(-1),
     _bootIdx(0) {
+  _productId[0] = '\0';
 }
 
 void PersistedProperties::begin() {
@@ -55,7 +56,32 @@ void PersistedProperties::begin() {
     Log::debug("Loaded bootIdx from NVS: %d", _bootIdx);
   }
 
+  // Load product ID (empty string if not set)
+  if (prefs.isKey(KEY_PRODUCT_ID)) {
+    prefs.getString(KEY_PRODUCT_ID, _productId, sizeof(_productId));
+    Log::debug("Loaded productId from NVS: %s", _productId);
+  }
+
   prefs.end();
+}
+
+void PersistedProperties::clearAll() {
+  if (!openNvsForWriting()) return;
+
+  if (prefs.clear()) {
+    Log::info("All persisted properties cleared from NVS");
+  } else {
+    Log::error("Failed to clear NVS namespace");
+  }
+
+  closeNvs();
+
+  // Reset in-memory cache
+  _mcuBaudRate = 0;
+  _powerOnLightState = -1;
+  _powerOnLightColourTemp = -1;
+  _bootIdx = 0;
+  _productId[0] = '\0';
 }
 
 // NVS write helpers
@@ -130,6 +156,28 @@ void PersistedProperties::setPowerOnLightColourTemp(uint8_t temp) {
     Log::error("Failed to write powerOnLightColourTemp to NVS");
   } else {
     Log::debug("Wrote powerOnLightColourTemp to NVS: %d", temp);
+  }
+
+  closeNvs();
+}
+
+// Product ID
+const char* PersistedProperties::getProductId() const {
+  return _productId;
+}
+
+void PersistedProperties::setProductId(const char* id) {
+  if (strcmp(_productId, id) == 0) return;
+
+  strncpy(_productId, id, sizeof(_productId) - 1);
+  _productId[sizeof(_productId) - 1] = '\0';
+
+  if (!openNvsForWriting()) return;
+
+  if (prefs.putString(KEY_PRODUCT_ID, _productId) == 0) {
+    Log::error("Failed to write productId to NVS");
+  } else {
+    Log::debug("Wrote productId to NVS: %s", _productId);
   }
 
   closeNvs();

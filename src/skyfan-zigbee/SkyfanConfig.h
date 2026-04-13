@@ -81,9 +81,8 @@
 #define TUYA_HEARTBEAT_INTERVAL_MS     10000  // 10 seconds
 #define TUYA_CONNECTION_TIMEOUT_MS     30000  // 30 seconds
 #define TUYA_COMMAND_TIMEOUT_MS        500    // 0.5 seconds - ACK timeout
-#define TUYA_STATUS_RESPONSE_TIMEOUT_MS 1500  // 1.5 seconds - Status report timeout per Tuya spec
+#define TUYA_STATUS_RESPONSE_TIMEOUT_MS 1500  // 1500ms - Status report timeout
 #define TUYA_INTER_COMMAND_DELAY_MS    10     // 10ms minimum gap between commands
-#define MCU_NOT_RESPONDING_BYPASS_MS   2000   // 2 seconds - bypass Tuya after ACK timeout
 #define ZIGBEE_CONNECTION_POLL_MS      100    // 100ms
 #define FACTORY_RESET_DELAY_MS         1000   // 1 second
 
@@ -137,9 +136,9 @@ enum class CustomClusterRole : uint8_t {
 
 // Colour temperature levels with clear naming
 enum class ColourTempLevel : uint8_t {
-  WARM = 0,      // 3000K
+  COOL = 0,      // 6500K
   NATURAL = 1,   // 4200K
-  COOL = 2       // 6500K
+  WARM = 2       // 3000K
 };
 
 // Fan mode for MCU-specific operations (enum values sent to MCU)

@@ -31,8 +31,7 @@ using RollbackCallback = std::function<void()>;
 // Command queue state machine
 enum class CommandQueueState {
   IDLE,            // No command being processed
-  AWAITING_ACK,    // Sent command, waiting for MCU ACK
-  AWAITING_STATUS  // Got ACK, waiting for status confirmation
+  AWAITING_STATUS  // Sent command, waiting for status report confirmation
 };
 
 // Tuya packet structure constants (needed by TuyaMessage struct)
@@ -45,9 +44,8 @@ struct QueuedCommand {
   uint8_t type;           // DP_TYPE_BOOL, DP_TYPE_VALUE, DP_TYPE_ENUM
   uint32_t value;
   RollbackCallback rollback;
-  bool tracked;           // Wait for status confirmation (1.5s timeout)
 
-  QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr), tracked(true) {}
+  QueuedCommand() : dpid(0), type(0), value(0), rollback(nullptr) {}
 };
 
 // Tuya message structure - encapsulates a complete received packet
@@ -111,9 +109,9 @@ struct TuyaMessage {
 #define FAN_DIRECTION_REVERSE 1
 
 // Light Colour Temperature Values
-#define COLOUR_TEMP_WARM 0    // 3000K
+#define COLOUR_TEMP_COOL 0    // 6500K
 #define COLOUR_TEMP_NATURAL 1 // 4200K
-#define COLOUR_TEMP_COOL 2    // 6500K
+#define COLOUR_TEMP_WARM 2    // 3000K
 
 // Network Status Codes (WiFi protocol mapped to Zigbee states)
 #define NETWORK_STATUS_NOT_JOINED     0x00  // Zigbee not joined to network
@@ -145,10 +143,6 @@ private:
   TuyaProtocolState rxState;
   TuyaMessage rxMessage;
 
-  // MCU responsiveness tracking - when ACK timeout occurs, bypass Tuya for 2s
-  bool mcuNotResponding;
-  unsigned long mcuNotRespondingSince;
-
   // Radio connection state (set via setRadioConnected(), used by processResponse())
   bool radioConnected;
 
@@ -166,10 +160,13 @@ private:
   QueuedCommand currentCommand;
   unsigned long commandSentTime = 0;
   unsigned long lastCommandCompletedTime = 0;
-  uint8_t currentDpidForStatus = 0;  // DPID we're waiting for status on
 
   // Heartbeat packet length (header + checksum, no data)
   static constexpr uint8_t HEARTBEAT_PACKET_LENGTH = 7;
+
+  // Product info (parsed from MCU init sequence, not actively queried)
+  char _productId[32];
+  void parseProductInfo(uint8_t* data, uint16_t len);
 
   // Packet state machine - processes one byte, returns true when packet complete
   bool processByte(uint8_t byte);
@@ -199,9 +196,11 @@ public:
   void sendWorkMode();
   void sendDatapointQuery();
 
+  // Product info (parsed from MCU init sequence)
+  const char* getProductId() const;
+
   // Status functions
   bool isConnected() const;
-  bool isMcuResponding();  // Returns false if MCU ACK timed out recently (within 2s)
   void processResponse();
   void setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32_t value));
 
@@ -210,7 +209,7 @@ public:
 
   // Command queue functions
   bool queueCommand(uint8_t dpid, uint8_t type, uint32_t value,
-                    RollbackCallback rollback = nullptr, bool tracked = true);
+                    RollbackCallback rollback = nullptr);
   void processQueue();
   void clearQueue();
   bool isQueueEmpty() const;
