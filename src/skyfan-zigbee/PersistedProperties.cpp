@@ -24,6 +24,7 @@ PersistedProperties::PersistedProperties()
     _powerOnLightColourTemp(-1),
     _bootIdx(0) {
   _productId[0] = '\0';
+  _productIdMismatch[0] = '\0';
 }
 
 void PersistedProperties::begin() {
@@ -62,6 +63,12 @@ void PersistedProperties::begin() {
     Log::debug("Loaded productId from NVS: %s", _productId);
   }
 
+  // Load product ID mismatch (empty string if not set)
+  if (prefs.isKey(KEY_PID_MISMATCH)) {
+    prefs.getString(KEY_PID_MISMATCH, _productIdMismatch, sizeof(_productIdMismatch));
+    Log::debug("Loaded pidMismatch from NVS: %s", _productIdMismatch);
+  }
+
   prefs.end();
 }
 
@@ -82,6 +89,7 @@ void PersistedProperties::clearAll() {
   _powerOnLightColourTemp = -1;
   _bootIdx = 0;
   _productId[0] = '\0';
+  _productIdMismatch[0] = '\0';
 }
 
 // NVS write helpers
@@ -178,6 +186,26 @@ void PersistedProperties::setProductId(const char* id) {
     Log::error("Failed to write productId to NVS");
   } else {
     Log::debug("Wrote productId to NVS: %s", _productId);
+  }
+
+  closeNvs();
+}
+
+// Product ID Mismatch
+const char* PersistedProperties::getProductIdMismatch() const {
+  return _productIdMismatch;
+}
+
+void PersistedProperties::setProductIdMismatch(const char* id) {
+  strncpy(_productIdMismatch, id, sizeof(_productIdMismatch) - 1);
+  _productIdMismatch[sizeof(_productIdMismatch) - 1] = '\0';
+
+  if (!openNvsForWriting()) return;
+
+  if (prefs.putString(KEY_PID_MISMATCH, _productIdMismatch) == 0) {
+    Log::error("Failed to write pidMismatch to NVS");
+  } else {
+    Log::debug("Wrote pidMismatch to NVS: %s", _productIdMismatch);
   }
 
   closeNvs();

@@ -21,9 +21,8 @@
 #include <Arduino.h>
 
 // === Feature Configuration ===
-#define WITH_LIGHT  // Comment out to disable light functionality
 // #define __DEBUG__   // Comment out to disable debug logging
-#define __BOOT_LOG__  // Comment out to disable boot logging persistence
+// #define __BOOT_LOG__  // Uncomment to enable boot logging persistence
 
 // === Firmware Version ===
 // Injected at build time by CI; fallback for local builds
@@ -57,15 +56,17 @@
 
 // === Zigbee Configuration ===
 #define ZIGBEE_FAN_CONTROL_ENDPOINT    1
-#ifdef WITH_LIGHT
 #define ZIGBEE_LIGHT_CONTROL_ENDPOINT  2
-#endif
 #define ZIGBEE_DEVICE_MANUFACTURER     "Front Left Speaker"
-#ifdef WITH_LIGHT
-#define ZIGBEE_MODEL_NAME          "Ventair Skyfan/Light ZB Adaptor"
-#else
-#define ZIGBEE_MODEL_NAME          "Ventair Skyfan ZB Adaptor"
-#endif
+
+constexpr const char* PRODUCT_ID_FAN_LIGHT = "pktxz1vynowmavuc";
+constexpr const char* ZIGBEE_MODEL_NAME_FAN_LIGHT = "Ventair Skyfan/Light ZB Adaptor";
+constexpr const char* ZIGBEE_MODEL_NAME_FAN_ONLY  = "Ventair Skyfan ZB Adaptor";
+
+inline bool isLightModel(const char* productId) {
+  if (productId == nullptr || productId[0] == '\0') return true;
+  return strcmp(productId, PRODUCT_ID_FAN_LIGHT) == 0;
+}
 
 // === Custom Cluster Configuration ===
 #define VENTAIR_CUSTOM_CLUSTER_ID      0xFC00  // Custom cluster ID. Made up but must be > ESP_ZB_CUSTOM_CLUSTER_ID_MIN_VAL

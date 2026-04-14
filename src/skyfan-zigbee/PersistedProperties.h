@@ -33,6 +33,7 @@ private:
   static constexpr const char* KEY_BOOT_IDX = "bootIdx";
   static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
   static constexpr const char* KEY_PRODUCT_ID = "productId";
+  static constexpr const char* KEY_PID_MISMATCH = "pidMismatch";
   static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
   // NVS write helpers
@@ -45,6 +46,7 @@ private:
   int8_t _powerOnLightColourTemp;  // -1 = not set, 0-2 = temp value
   uint8_t _bootIdx;                // 0 = uninitialised, 1-5 = last written slot
   char _productId[32];             // Empty string = not set
+  char _productIdMismatch[32];     // Empty string = no mismatch detected
 
 public:
   PersistedProperties();
@@ -68,6 +70,10 @@ public:
   // Product ID (returns empty string if not set)
   const char* getProductId() const;
   void setProductId(const char* id);
+
+  // Product ID mismatch (diagnostic - returns empty string if no mismatch)
+  const char* getProductIdMismatch() const;
+  void setProductIdMismatch(const char* id);
 
   // Boot log persistence (circular buffer of BOOT_LOG_SLOTS entries)
   void writeBootLog(const char* logData);

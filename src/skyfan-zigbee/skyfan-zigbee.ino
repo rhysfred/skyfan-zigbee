@@ -44,11 +44,11 @@ LedStatusIndicator statusLed(led);
 HardwareSerial& tuyaSerial = Serial0;
 
 SkyfanZigbeeFanControl zbFanControl = SkyfanZigbeeFanControl(ZIGBEE_FAN_CONTROL_ENDPOINT);
-#ifdef WITH_LIGHT
 SkyfanZigbeeLight zbLight = SkyfanZigbeeLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
-#endif
 TuyaProtocol tuya(&tuyaSerial);
 PersistedProperties props;
+
+bool hasLight = true;
 
 // OTA state tracking
 volatile bool otaRunning = false;
@@ -107,7 +107,6 @@ void setFanDirection(uint8_t direction) {
 }
 
 /********************* light control callback functions **************************/
-#ifdef WITH_LIGHT
 static bool lightCallbackInitialized = false;  // Skip first callback from initialization
 
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
@@ -150,7 +149,6 @@ void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
   Log::info("Light set to %s, level %d, temp %d mired (%dK) by Zigbee",
     on ? "ON" : "OFF", level, colourTempMired, miredToKelvin(colourTempMired));
 }
-#endif
 
 /********************* device status callback function **************************/
 void onDeviceStatus(uint8_t dpid, uint32_t value) {
@@ -162,13 +160,15 @@ void onDeviceStatus(uint8_t dpid, uint32_t value) {
       zbFanControl.handleStatusUpdate(dpid, value);
       break;
 
-#ifdef WITH_LIGHT
     case DP_LIGHT_SWITCH:
     case DP_LIGHT_DIMMER:
     case DP_LIGHT_COLOUR_TEMP:
-      zbLight.handleStatusUpdate(dpid, value);
+      if (hasLight) {
+        zbLight.handleStatusUpdate(dpid, value);
+      } else {
+        Log::debug("Ignoring light DPID %d on fan-only model", dpid);
+      }
       break;
-#endif
 
     default:
       Log::error("Unknown status update - DPID: %d, Value: %lu from Skyfan", dpid, value);
@@ -227,34 +227,46 @@ void setup() {
     delay(5);
   }
 
-  // Persist product ID if received during MCU init sequence, otherwise log previously stored value
-  const char* productId = tuya.getProductId();
-  if (productId[0] != '\0') {
-    props.setProductId(productId);
-    Log::info("Product ID: %s", productId);
+  // Resolve product ID: NVS cache takes precedence, MCU value used to populate or detect mismatch
+  const char* storedProductId = props.getProductId();
+  const char* mcuProductId = tuya.getProductId();
+
+  if (storedProductId[0] == '\0' && mcuProductId[0] != '\0') {
+    // First boot with this MCU — persist its product ID
+    props.setProductId(mcuProductId);
+    storedProductId = props.getProductId();
+    Log::info("Product ID: %s (from MCU, persisted)", storedProductId);
+  } else if (storedProductId[0] != '\0' && mcuProductId[0] != '\0'
+             && strcmp(storedProductId, mcuProductId) != 0) {
+    // MCU product ID differs from persisted — log warning, persist mismatch for diagnostics
+    props.setProductIdMismatch(mcuProductId);
+    Log::error("Product ID mismatch! NVS: %s, MCU: %s (using NVS value)", storedProductId, mcuProductId);
+  } else if (storedProductId[0] != '\0') {
+    Log::info("Product ID: %s (from NVS)", storedProductId);
+  } else if (mcuProductId[0] != '\0') {
+    Log::info("Product ID: %s (from MCU)", mcuProductId);
   } else {
-    const char* stored = props.getProductId();
-    if (stored[0] != '\0') {
-      Log::info("Product ID (from NVS): %s", stored);
-    } else {
-      Log::info("Product ID: not available");
-    }
+    Log::info("Product ID: not available (defaulting to fan+light)");
   }
 
+  hasLight = isLightModel(storedProductId);
+  const char* modelName = hasLight ? ZIGBEE_MODEL_NAME_FAN_LIGHT : ZIGBEE_MODEL_NAME_FAN_ONLY;
+  Log::info("Model: %s (light: %s)", modelName, hasLight ? "yes" : "no");
+
   // Set Zigbee device name and model
-  zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, ZIGBEE_MODEL_NAME);
+  zbFanControl.setManufacturerAndModel(ZIGBEE_DEVICE_MANUFACTURER, modelName);
 
   // Configure device power source as mains-powered (not battery)
   zbFanControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
   Log::debug("Device configured as mains-powered");
 
-#ifdef WITH_LIGHT
-  // Configure light colour capabilities to support colour temperature
-  zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
-  
-  // Set colour temperature range (154-333 mired = 6500K-3000K)
-  zbLight.setLightColorTemperatureRange(ZIGBEE_COLOUR_TEMP_MIN_MIRED, ZIGBEE_COLOUR_TEMP_MAX_MIRED);
-#endif
+  if (hasLight) {
+    // Configure light colour capabilities to support colour temperature
+    zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
+
+    // Set colour temperature range (154-333 mired = 6500K-3000K)
+    zbLight.setLightColorTemperatureRange(ZIGBEE_COLOUR_TEMP_MIN_MIRED, ZIGBEE_COLOUR_TEMP_MAX_MIRED);
+  }
 
   // Set the fan mode sequence to LOW_MED_HIGH
   zbFanControl.setFanModeSequence(FAN_MODE_SEQUENCE_LOW_MED_HIGH);
@@ -262,9 +274,9 @@ void setup() {
   // Set callback functions for fan and light control
   zbFanControl.onFanModeChange(setFan);
   zbFanControl.onFanDirectionChange(setFanDirection);
-#ifdef WITH_LIGHT
-  zbLight.onLightChangeTemp(setLight);
-#endif
+  if (hasLight) {
+    zbLight.onLightChangeTemp(setLight);
+  }
 
   // Create custom cluster BEFORE endpoint registration
   if (!zbFanControl.createCustomCluster()) {
@@ -286,10 +298,10 @@ void setup() {
   // Add endpoints to Zigbee Core
   Log::debug("Adding ZigbeeFanControl endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbFanControl);
-#ifdef WITH_LIGHT
-  Log::debug("Adding ZigbeeLight endpoint to Zigbee Core");
-  Zigbee.addEndpoint(&zbLight);
-#endif
+  if (hasLight) {
+    Log::debug("Adding ZigbeeLight endpoint to Zigbee Core");
+    Zigbee.addEndpoint(&zbLight);
+  }
 
   // When all EPs are registered, start Zigbee in ROUTER mode
   if (!Zigbee.begin(ZIGBEE_ROUTER)) {
@@ -317,11 +329,11 @@ void setup() {
   Serial.println();
   Log::info("Zigbee connected successfully");
 
-#ifdef WITH_LIGHT
-  // Initialize color temperature to set color mode to TEMPERATURE
-  // This ensures the temp callback is called for on/off and level changes
-  zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
-#endif
+  if (hasLight) {
+    // Initialise colour temperature to set colour mode to TEMPERATURE
+    // This ensures the temp callback is called for on/off and level changes
+    zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
+  }
 
   // Start OTA client query - first request is within a minute, then hourly automatically
   zbFanControl.requestOTAUpdate();
@@ -338,9 +350,13 @@ void loop() {
     if (c == 'p' || c == 'P') {
       const char* id = props.getProductId();
       if (id[0] != '\0') {
-        Log::info("Product ID: %s", id);
+        Log::info("Product ID: %s (light: %s)", id, isLightModel(id) ? "yes" : "no");
       } else {
-        Log::info("Product ID: not set");
+        Log::info("Product ID: not set (defaulting to light: yes)");
+      }
+      const char* mismatch = props.getProductIdMismatch();
+      if (mismatch[0] != '\0') {
+        Log::info("Product ID mismatch: %s", mismatch);
       }
     }
 #ifdef __BOOT_LOG__
