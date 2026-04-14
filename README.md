@@ -104,8 +104,7 @@ skyfan-zigbee/
 │       ├── PersistedProperties.cpp # NVS-backed persistent property storage implementation
 │       └── Logger.h               # Centralised logging utilities
 ├── zigbee2mqtt/
-│   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
-│   ├── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
+│   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for both fan+light and fan-only models
 │   └── ota-index.json             # OTA firmware index for Zigbee2MQTT (auto-updated on release)
 ├── electronics/
 │   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
@@ -151,9 +150,8 @@ skyfan-zigbee/
    ```
 
 3. **Configure Zigbee2MQTT**:
-   - For fan+light models: Use `zigbee2mqtt/skyfanConverter.mjs`
-   - For fan-only models: Use `zigbee2mqtt/skyfanFanOnlyConverter.mjs`
-   - Copy the appropriate converter to your Zigbee2MQTT external converters directory
+   - Copy `zigbee2mqtt/skyfanConverter.mjs` to your Zigbee2MQTT external converters directory
+   - This single converter handles both fan+light and fan-only models automatically
 
 4. **Hardware Connections**:
    - Connect ESP32 UART to MCU UART (TX↔RX, RX↔TX)
