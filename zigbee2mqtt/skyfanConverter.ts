@@ -1,6 +1,5 @@
 import {Zcl} from "zigbee-herdsman";
 
-import * as tz from "../converters/toZigbee";
 import * as exposes from "../lib/exposes";
 import * as m from "../lib/modernExtend";
 import * as reporting from "../lib/reporting";
@@ -9,7 +8,8 @@ import type {DefinitionWithExtend, Fz, Tz, Zh} from "../lib/types";
 const e = exposes.presets;
 const ea = exposes.access;
 
-// Front Left Speaker manufacturer-specific constants
+// Front Left Speaker manufacturer-specific constants. These are made up and
+// should really be registered
 const FLS_MANUFACTURER_CODE = 0x1818;
 const CUSTOM_CLUSTER_ID = 0xfc00;
 const FAN_DIRECTION_ATTR_ID = 0x0001;
@@ -40,36 +40,20 @@ const fzLocal = {
             }
         },
     } satisfies Fz.Converter,
-    light_state: {
-        cluster: "genOnOff",
-        type: ["attributeReport", "readResponse"],
-        convert: (model, msg, publish, options, meta) => {
-            if (msg.data.onOff !== undefined) {
-                return {state_light: msg.data.onOff ? "ON" : "OFF"};
-            }
-        },
-    } satisfies Fz.Converter,
-    light_brightness: {
-        cluster: "genLevelCtrl",
-        type: ["attributeReport", "readResponse"],
-        convert: (model, msg, publish, options, meta) => {
-            if (msg.data.currentLevel !== undefined) {
-                return {brightness_light: msg.data.currentLevel};
-            }
-        },
-    } satisfies Fz.Converter,
-    light_color_temp: {
-        cluster: "lightingColorCtrl",
-        type: ["attributeReport", "readResponse"],
-        convert: (model, msg, publish, options, meta) => {
-            if (msg.data.colorTemperature !== undefined) {
-                return {color_temp_light: msg.data.colorTemperature};
-            }
-        },
-    } satisfies Fz.Converter,
 };
 
 const tzLocal = {
+    fan_mode: {
+        key: ["fan_mode"],
+        convertSet: async (entity, key, value, meta) => {
+            const modeMap: Record<string, number> = {off: 0, low: 1, medium: 2, high: 3, on: 4, auto: 5, smart: 6};
+            await entity.write("hvacFanCtrl", {fanMode: modeMap[value as string] ?? 0});
+            return {state: {fan_mode_fan: value, fan_state_fan: value === "off" ? "OFF" : "ON"}};
+        },
+        convertGet: async (entity, key, meta) => {
+            await entity.read("hvacFanCtrl", ["fanMode"]);
+        },
+    } satisfies Tz.Converter,
     fan_direction: {
         key: ["fan_direction"],
         convertSet: async (entity, key, value, meta) => {
@@ -103,7 +87,7 @@ const fanExposes = [
 ];
 
 const fanFromZigbee = [fzLocal.fan_mode, fzLocal.fan_direction];
-const fanToZigbee = [tz.fan_mode, tzLocal.fan_direction];
+const fanToZigbee = [tzLocal.fan_mode, tzLocal.fan_direction];
 
 async function configureFan(device: Zh.Device, coordinatorEndpoint: Zh.Endpoint) {
     const fanEndpoint = device.getEndpoint(1);
@@ -137,7 +121,7 @@ const definitions: DefinitionWithExtend[] = [
             m.light({colorTemp: {range: [154, 333]}, endpointNames: ["light"]}),
         ],
         exposes: fanExposes,
-        fromZigbee: [...fanFromZigbee, fzLocal.light_state, fzLocal.light_brightness, fzLocal.light_color_temp],
+        fromZigbee: fanFromZigbee,
         toZigbee: fanToZigbee,
         configure: async (device, coordinatorEndpoint) => {
             await configureFan(device, coordinatorEndpoint);

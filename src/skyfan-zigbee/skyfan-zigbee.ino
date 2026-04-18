@@ -335,6 +335,17 @@ void setup() {
     zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
   }
 
+  // Re-query MCU state now that Zigbee is connected. The initial query during
+  // setup populated confirmed state but reports couldn't reach the coordinator.
+  // This second query lets handleStatusUpdate send reports that actually arrive.
+  tuya.sendDatapointQuery();
+  unsigned long syncStart = millis();
+  while (millis() - syncStart < 500) {
+    tuya.processResponse();
+    delay(5);
+  }
+  Log::info("Initial state synced to coordinator");
+
   // Start OTA client query - first request is within a minute, then hourly automatically
   zbFanControl.requestOTAUpdate();
   Log::debug("OTA update check scheduled");
