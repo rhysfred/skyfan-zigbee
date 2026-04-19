@@ -198,31 +198,12 @@ HeartbeatResult TuyaProtocol::checkHeartbeat() {
 
 int32_t TuyaProtocol::connect(uint32_t baudRate) {
   if (baudRate > 0) {
-    // Verify connection at provided baud rate (5 attempts)
-    Log::info("Verifying connection at %lu baud", baudRate);
-
+    Log::info("Using persisted baud rate: %lu", baudRate);
     serial->end();
     delay(10);
     serial->begin(baudRate);
-
-    for (uint8_t attempt = 0; attempt < 5; attempt++) {
-      Log::debug("Connection attempt %d/5 at %lu baud", attempt + 1, baudRate);
-
-      HeartbeatResult hbResult = checkHeartbeat();
-      Log::boot(baudRate, tuyaBuffer, HEARTBEAT_PACKET_LENGTH,
-                hbResult.rxBytes, hbResult.rxCount, hbResult.success);
-
-      if (hbResult.success) {
-        Log::info("Connection verified at %lu baud", baudRate);
-        return baudRate;
-      }
-
-      // Wait remainder of 1-second interval before next attempt
-      delay(BAUD_NEGOTIATION_INTERVAL_MS - TUYA_COMMAND_TIMEOUT_MS);
-    }
-
-    Log::error("Failed to verify connection at %lu baud", baudRate);
-    return 0;
+    sendHeartbeat();
+    return baudRate;
   }
 
   // Negotiate baud rate (try 9600 first, then 115200)

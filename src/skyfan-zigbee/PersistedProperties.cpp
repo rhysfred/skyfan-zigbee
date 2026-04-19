@@ -17,6 +17,7 @@
 
 #include "PersistedProperties.h"
 #include "Logger.h"
+#include "esp_system.h"
 
 PersistedProperties::PersistedProperties()
   : _mcuBaudRate(0),
@@ -25,6 +26,7 @@ PersistedProperties::PersistedProperties()
     _bootIdx(0),
     _mcuRestarts(0),
     _zigbeeModuleRestarts(0),
+    _lastResetReason(0),
     _skipNextMcuRestart(true) {
   _productId[0] = '\0';
   _productIdMismatch[0] = '\0';
@@ -90,6 +92,12 @@ void PersistedProperties::begin() {
     _zigbeeModuleRestarts = 0;
   }
 
+  // Load previous reset reason (0 = unknown/not set)
+  if (prefs.isKey(KEY_LAST_RESET)) {
+    _lastResetReason = prefs.getUChar(KEY_LAST_RESET, 0);
+    Log::debug("Previous reset reason: %s", resetReasonToString(_lastResetReason));
+  }
+
   prefs.end();
 
   // Write restart counters (need read-write access)
@@ -107,6 +115,9 @@ void PersistedProperties::begin() {
     prefs.putUInt(KEY_MCU_RESTARTS, 0);
     Log::debug("MCU restarts counter initialised");
   }
+
+  // Save current reset reason for next boot's diagnostics
+  prefs.putUChar(KEY_LAST_RESET, static_cast<uint8_t>(esp_reset_reason()));
 
   closeNvs();
 }
@@ -131,6 +142,7 @@ void PersistedProperties::clearAll() {
   _productIdMismatch[0] = '\0';
   _mcuRestarts = 0;
   _zigbeeModuleRestarts = 0;
+  _lastResetReason = 0;
   _skipNextMcuRestart = true;
 }
 
@@ -252,6 +264,25 @@ uint32_t PersistedProperties::getZigbeeModuleRestarts() const {
   return _zigbeeModuleRestarts;
 }
 
+uint8_t PersistedProperties::getLastResetReason() const {
+  return _lastResetReason;
+}
+
+const char* PersistedProperties::resetReasonToString(uint8_t reason) {
+  switch (static_cast<esp_reset_reason_t>(reason)) {
+    case ESP_RST_POWERON:   return "Power-on";
+    case ESP_RST_SW:        return "Software reset";
+    case ESP_RST_PANIC:     return "Exception/panic";
+    case ESP_RST_INT_WDT:   return "Interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "Task watchdog";
+    case ESP_RST_WDT:       return "Other watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep sleep wake";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Unknown";
+  }
+}
+
 void PersistedProperties::onMcuHeartbeat(bool isRestart) {
   if (_skipNextMcuRestart) {
     _skipNextMcuRestart = false;
@@ -280,6 +311,8 @@ void PersistedProperties::dumpAll() const {
   }
   Log::info("MCU restarts: %lu", _mcuRestarts);
   Log::info("Zigbee module restarts: %lu", _zigbeeModuleRestarts);
+  Log::info("Current reset reason: %s", resetReasonToString(static_cast<uint8_t>(esp_reset_reason())));
+  Log::info("Previous reset reason: %s", _lastResetReason != 0 ? resetReasonToString(_lastResetReason) : "not available");
   Log::info("Power-on light state: %s",
     _powerOnLightState < 0 ? "not set" : (_powerOnLightState ? "on" : "off"));
   if (_powerOnLightColourTemp < 0) {

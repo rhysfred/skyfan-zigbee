@@ -50,6 +50,21 @@ PersistedProperties props;
 
 bool hasLight = true;
 
+const char* getResetReasonString() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "Power-on";
+    case ESP_RST_SW:        return "Software reset";
+    case ESP_RST_PANIC:     return "Exception/panic";
+    case ESP_RST_INT_WDT:   return "Interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "Task watchdog";
+    case ESP_RST_WDT:       return "Other watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep sleep wake";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Unknown";
+  }
+}
+
 // OTA state tracking
 volatile bool otaRunning = false;
 
@@ -191,6 +206,7 @@ void otaStateCallback(bool otaActive) {
 void setup() {
   Log::begin(DEBUG_SERIAL_BAUD_RATE);  // USB Serial for debug output
   Log::info("Skyfan Zigbee Controller starting...");
+  Log::info("Reset reason: %s", getResetReasonString());
 
   // Load persisted properties from NVS
   props.begin();
@@ -220,10 +236,9 @@ void setup() {
   }
 #endif
 
-  // Register status callback early so datapoint query responses are handled
-  tuya.setDeviceStatusCallback(onDeviceStatus);
-
-  // Query MCU for current datapoint values (populates confirmed state)
+  // Drain any pending MCU status data before Zigbee starts (responses are
+  // discarded — no callback registered yet, avoiding calls into uninitialised
+  // Zigbee stack)
   delay(50);
   tuya.sendDatapointQuery();
   unsigned long queryStart = millis();
@@ -314,6 +329,9 @@ void setup() {
     cleanupAllResources();
     ESP.restart();
   }
+
+  // Register status callback now that Zigbee stack is initialised
+  tuya.setDeviceStatusCallback(onDeviceStatus);
 
   Log::info("Connecting to network (hold BOOT 3s to factory reset)");
   while (!Zigbee.connected()) {

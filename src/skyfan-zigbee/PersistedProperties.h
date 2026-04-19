@@ -36,6 +36,7 @@ private:
   static constexpr const char* KEY_PID_MISMATCH = "pidMismatch";
   static constexpr const char* KEY_MCU_RESTARTS = "mcuRestarts";
   static constexpr const char* KEY_ZB_RESTARTS = "zbRestarts";
+  static constexpr const char* KEY_LAST_RESET = "lastReset";
   static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
   // NVS write helpers
@@ -51,7 +52,10 @@ private:
   char _productIdMismatch[32];     // Empty string = no mismatch detected
   uint32_t _mcuRestarts;            // Count of MCU restart heartbeats
   uint32_t _zigbeeModuleRestarts;   // Count of Zigbee module restarts
+  uint8_t _lastResetReason;         // Previous boot's reset reason (esp_reset_reason_t)
   bool _skipNextMcuRestart;         // True when mcuRestarts key was just created (or cleared)
+
+  static const char* resetReasonToString(uint8_t reason);
 
 public:
   PersistedProperties();
@@ -82,6 +86,7 @@ public:
   // Restart metrics
   uint32_t getMcuRestarts() const;
   uint32_t getZigbeeModuleRestarts() const;
+  uint8_t getLastResetReason() const;
   void onMcuHeartbeat(bool isRestart);
 
   // Diagnostics
