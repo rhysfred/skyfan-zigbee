@@ -397,6 +397,10 @@ void TuyaProtocol::setDeviceStatusCallback(void (*callback)(uint8_t dpid, uint32
   deviceStatusCallback = callback;
 }
 
+void TuyaProtocol::setHeartbeatCallback(HeartbeatCallback callback) {
+  heartbeatCallback = callback;
+}
+
 void TuyaProtocol::processResponse() {
   while (serial->available()) {
     uint8_t byte = serial->read();
@@ -455,6 +459,10 @@ void TuyaProtocol::processResponse() {
     } else if (rxMessage.command == TUYA_CMD_HEARTBEAT) {
       tuyaConnected = true;
       lastHeartbeat = millis();
+      if (heartbeatCallback) {
+        bool isRestart = (rxMessage.dataLength > 0 && rxMessage.data[0] == 0x00);
+        heartbeatCallback(isRestart);
+      }
     } else if (rxMessage.command == TUYA_CMD_PRODUCT_INFO) {
       if (rxMessage.dataLength > 0) {
         // MCU sent its product info (response to our query, or MCU-initiated)

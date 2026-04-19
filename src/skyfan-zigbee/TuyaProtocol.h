@@ -146,6 +146,10 @@ private:
   // Radio connection state (set via setRadioConnected(), used by processResponse())
   bool radioConnected;
 
+  // Heartbeat callback (fires on each heartbeat processed via processResponse())
+  using HeartbeatCallback = std::function<void(bool isRestart)>;
+  HeartbeatCallback heartbeatCallback = nullptr;
+
   // Rollback guard - prevents re-entrant command queueing during rollback
   bool rollbackInProgress = false;
 
@@ -198,6 +202,9 @@ public:
 
   // Product info (parsed from MCU init sequence)
   const char* getProductId() const;
+
+  // Heartbeat callback
+  void setHeartbeatCallback(HeartbeatCallback callback);
 
   // Status functions
   bool isConnected() const;

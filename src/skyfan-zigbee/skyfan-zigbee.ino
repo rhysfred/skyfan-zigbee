@@ -195,6 +195,11 @@ void setup() {
   // Load persisted properties from NVS
   props.begin();
 
+  // Register heartbeat callback before connect() so heartbeats during the DP query loop are captured
+  tuya.setHeartbeatCallback([](bool isRestart) {
+    props.onMcuHeartbeat(isRestart);
+  });
+
   // Connect to MCU - use persisted baud rate if available, otherwise negotiate
   uint32_t storedRate = props.getMcuBaudRate();
   if (storedRate > 0) {
@@ -354,27 +359,18 @@ void setup() {
 void loop() {
   if (Serial.available()) {
     char c = Serial.read();
-    if (c == 'r' || c == 'R') {
-      props.clearMcuBaudRate();
-      Log::info("MCU baud rate will be re-negotiated on next boot");
+    if (c == 's' || c == 'S') {
+      props.dumpAll();
+    } else if (c == 'c' || c == 'C') {
+      props.clearAll();
+      Log::info("All persisted data cleared");
+    } else if (c == 'r' || c == 'R') {
+      Log::info("Factory reset requested via serial");
+      props.clearAll();
+      cleanupAllResources();
+      delay(FACTORY_RESET_DELAY_MS);
+      Zigbee.factoryReset();
     }
-    if (c == 'p' || c == 'P') {
-      const char* id = props.getProductId();
-      if (id[0] != '\0') {
-        Log::info("Product ID: %s (light: %s)", id, isLightModel(id) ? "yes" : "no");
-      } else {
-        Log::info("Product ID: not set (defaulting to light: yes)");
-      }
-      const char* mismatch = props.getProductIdMismatch();
-      if (mismatch[0] != '\0') {
-        Log::info("Product ID mismatch: %s", mismatch);
-      }
-    }
-#ifdef __BOOT_LOG__
-    if (c == 'b' || c == 'B') {
-      props.dumpBootLogs();
-    }
-#endif
   }
 
   // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
