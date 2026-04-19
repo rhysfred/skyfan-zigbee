@@ -1,7 +1,6 @@
 import {access, presets} from "zigbee-herdsman-converters/lib/exposes";
 import * as m from "zigbee-herdsman-converters/lib/modernExtend";
 import * as reporting from "zigbee-herdsman-converters/lib/reporting";
-import * as ota from "zigbee-herdsman-converters/lib/ota";
 import {Zcl} from "zigbee-herdsman";
 
 const e = presets;
@@ -13,7 +12,7 @@ const FAN_DIRECTION_ATTR_ID = 0x0001;
 
 const manufacturerOptions = {manufacturerCode: FLS_MANUFACTURER_CODE};
 
-// Custom fromZigbee converters with explicit endpoint suffixes for multi-endpoint state updates
+// Custom fromZigbee converters for fan clusters
 const fzLocal = {
     fan_mode: {
         cluster: "hvacFanCtrl",
@@ -22,7 +21,7 @@ const fzLocal = {
             if (msg.data.fanMode !== undefined) {
                 const fanModeMap = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"};
                 const mode = fanModeMap[msg.data.fanMode] ?? "off";
-                return {fan_mode_fan: mode, fan_state_fan: mode === "off" ? "OFF" : "ON"};
+                return {fan_mode: mode, fan_state: mode === "off" ? "OFF" : "ON"};
             }
         },
     },
@@ -32,7 +31,7 @@ const fzLocal = {
         convert: (model, msg, publish, options, meta) => {
             if (Object.hasOwn(msg.data, "fanDirection")) {
                 const direction = msg.data.fanDirection === 0 ? "forward" : "reverse";
-                return {fan_direction_fan: direction};
+                return {fan_direction: direction};
             }
         },
     },
@@ -44,7 +43,7 @@ const tzLocal = {
         convertSet: async (entity, key, value, meta) => {
             const modeMap = {off: 0, low: 1, medium: 2, high: 3, on: 4, auto: 5, smart: 6};
             await entity.write("hvacFanCtrl", {fanMode: modeMap[value] ?? 0});
-            return {state: {fan_mode_fan: value, fan_state_fan: value === "off" ? "OFF" : "ON"}};
+            return {state: {fan_mode: value, fan_state: value === "off" ? "OFF" : "ON"}};
         },
         convertGet: async (entity, key, meta) => {
             await entity.read("hvacFanCtrl", ["fanMode"]);
@@ -78,8 +77,8 @@ const fanExtensionsCluster = m.deviceAddCustomCluster("fanExtensions", {
 });
 
 const fanExposes = [
-    e.fan().withModes(["off", "low", "medium", "high"]).withEndpoint("fan"),
-    e.enum("fan_direction", access.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction").withEndpoint("fan"),
+    e.fan().withModes(["off", "low", "medium", "high", "on"]),
+    e.enum("fan_direction", access.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction"),
 ];
 
 const fanFromZigbee = [fzLocal.fan_mode, fzLocal.fan_direction];
@@ -159,7 +158,7 @@ export default [
                 // lightingColorCtrl reporting not supported, using binding only
             }
         },
-        ota: ota.zigbeeOTA,
+        ota: true,
     },
     {
         zigbeeModel: ["Ventair Skyfan ZB Adaptor"],
@@ -176,6 +175,6 @@ export default [
         configure: async (device, coordinatorEndpoint) => {
             await configureFan(device, coordinatorEndpoint);
         },
-        ota: ota.zigbeeOTA,
+        ota: true,
     },
 ];
