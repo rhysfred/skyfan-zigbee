@@ -119,7 +119,7 @@ export default [
         zigbeeModel: ["Ventair Skyfan/Light ZB Adaptor"],
         model: "Ventair Skyfan/Light ZB Adaptor",
         vendor: "Front Left Speaker",
-        description: "Ventair Skyfan ceiling fan with integrated lighting controller",
+        description: "Ventair Skyfan ceiling fan with integrated light controller",
         extend: [
             fanExtensionsCluster,
             m.deviceEndpoints({endpoints: {fan: 1, light: 2}}),

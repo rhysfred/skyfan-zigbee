@@ -1,9 +1,9 @@
 import {Zcl} from "zigbee-herdsman";
 
-import * as exposes from "zigbee-herdsman-converters/lib/exposes";
-import * as m from "zigbee-herdsman-converters/lib/modernExtend";
-import * as reporting from "zigbee-herdsman-converters/lib/reporting";
-import type {DefinitionWithExtend, Fz, Tz, Zh} from "zigbee-herdsman-converters/lib/types";
+import * as exposes from "../lib/exposes";
+import * as m from "../lib/modernExtend";
+import * as reporting from "../lib/reporting";
+import type {DefinitionWithExtend, Fz, Tz, Zh} from "../lib/types";
 
 const e = exposes.presets;
 const ea = exposes.access;
@@ -15,6 +15,14 @@ const CUSTOM_CLUSTER_ID = 0xfc00;
 const FAN_DIRECTION_ATTR_ID = 0x0001;
 
 const manufacturerOptions = {manufacturerCode: FLS_MANUFACTURER_CODE};
+
+interface FanExtensions {
+    attributes: {
+        fanDirection: number;
+    };
+    commands: never;
+    commandResponses: never;
+}
 
 const fanModeMap: Record<number, string> = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"};
 
@@ -29,7 +37,7 @@ const fzLocal = {
                 return {fan_mode: mode, fan_state: mode === "off" ? "OFF" : "ON"};
             }
         },
-    } satisfies Fz.Converter,
+    } satisfies Fz.Converter<"hvacFanCtrl", undefined, ["attributeReport", "readResponse"]>,
     fan_direction: {
         cluster: "fanExtensions",
         type: ["attributeReport", "readResponse"],
@@ -39,7 +47,7 @@ const fzLocal = {
                 return {fan_direction: direction};
             }
         },
-    } satisfies Fz.Converter,
+    } satisfies Fz.Converter<"fanExtensions", FanExtensions, ["attributeReport", "readResponse"]>,
 };
 
 const tzLocal = {
@@ -58,11 +66,11 @@ const tzLocal = {
         key: ["fan_direction"],
         convertSet: async (entity, key, value, meta) => {
             const directionValue = value === "forward" ? 0 : 1;
-            await entity.write("fanExtensions", {fanDirection: directionValue}, manufacturerOptions);
+            await entity.write<"fanExtensions", FanExtensions>("fanExtensions", {fanDirection: directionValue}, manufacturerOptions);
             return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
-            await entity.read("fanExtensions", ["fanDirection"], manufacturerOptions);
+            await entity.read<"fanExtensions", FanExtensions>("fanExtensions", ["fanDirection"], manufacturerOptions);
         },
     } satisfies Tz.Converter,
 };
@@ -70,11 +78,13 @@ const tzLocal = {
 // Shared custom cluster extension for fan direction
 const fanExtensionsCluster = m.deviceAddCustomCluster("fanExtensions", {
     ID: CUSTOM_CLUSTER_ID,
+    name: "fanExtensions",
     manufacturerCode: FLS_MANUFACTURER_CODE,
     attributes: {
         fanDirection: {
             ID: FAN_DIRECTION_ATTR_ID,
             type: Zcl.DataType.ENUM8,
+            name: "fanDirection",
         },
     },
     commands: {},
@@ -101,7 +111,7 @@ async function configureFan(device: Zh.Device, coordinatorEndpoint: Zh.Endpoint)
     }
 
     try {
-        await fanEndpoint.configureReporting("fanExtensions", [
+        await fanEndpoint.configureReporting<"fanExtensions", FanExtensions>("fanExtensions", [
             {attribute: "fanDirection", minimumReportInterval: 1, maximumReportInterval: 3600, reportableChange: 1},
         ]);
     } catch {
@@ -109,12 +119,12 @@ async function configureFan(device: Zh.Device, coordinatorEndpoint: Zh.Endpoint)
     }
 }
 
-const definitions: DefinitionWithExtend[] = [
+export const definitions: DefinitionWithExtend[] = [
     {
         zigbeeModel: ["Ventair Skyfan/Light ZB Adaptor"],
         model: "Ventair Skyfan/Light ZB Adaptor",
         vendor: "Front Left Speaker",
-        description: "Ventair Skyfan ceiling fan with integrated lighting controller",
+        description: "Ventair Skyfan ceiling fan with integrated light controller",
         extend: [
             fanExtensionsCluster,
             m.deviceEndpoints({endpoints: {fan: 1, light: 2}}),
@@ -170,5 +180,3 @@ const definitions: DefinitionWithExtend[] = [
         ota: true,
     },
 ];
-
-export default definitions;
