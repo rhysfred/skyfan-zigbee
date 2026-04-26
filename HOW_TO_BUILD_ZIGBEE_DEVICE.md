@@ -2,7 +2,7 @@
 
 A practical guide to developing Zigbee 3.0 devices using the ESP32-C6 and Arduino framework.
 
-This guide uses the [Skyfan Zigbee Controller](src/skyfan-zigbee/) as a worked example throughout. It's a ceiling fan controller that talks to a Tuya MCU, which is probably more complexity than you need, but the Zigbee bits are broadly applicable to whatever you're building.
+This guide uses the [Skyfan Zigbee Controller](src/skyfan-zigbee/) as a worked example throughout. It's a Zigbee controller for a Ventair Skyfan ceiling fan — the ESP32-C6 acts as a Zigbee router and translates commands to/from a separate microcontroller (MCU) inside the fan that drives the motor and lights via a Tuya serial protocol. That's probably more complexity than you need, but the Zigbee bits are broadly applicable to whatever you're building.
 
 ## Table of Contents
 
@@ -103,16 +103,16 @@ void setup() {
 }
 ```
 
-**Worked example** - This creates a fan endpoint and optionally a light endpoint based on build configuration ([`skyfan-zigbee.ino:43-46`](src/skyfan-zigbee/skyfan-zigbee.ino)):
+**Worked example** - The Skyfan creates a fan endpoint and optionally a light endpoint. Some models have an integrated light kit and some don't — the firmware queries the fan's internal MCU at startup to get its product ID (a string identifying the hardware variant), then decides whether to register the light endpoint ([`skyfan-zigbee.ino:46-47,301`](src/skyfan-zigbee/skyfan-zigbee.ino)):
 
 ```cpp
 SkyfanZigbeeFanControl zbFanControl = SkyfanZigbeeFanControl(ZIGBEE_FAN_CONTROL_ENDPOINT);
-#ifdef WITH_LIGHT
-ZigbeeColorDimmableLight zbLight = ZigbeeColorDimmableLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
-#endif
+SkyfanZigbeeLight zbLight = SkyfanZigbeeLight(ZIGBEE_LIGHT_CONTROL_ENDPOINT);
+// ...
+bool hasLight = isLightModel(storedProductId);  // Product ID queried from the fan's MCU
 ```
 
-The `#ifdef WITH_LIGHT` pattern lets one codebase produce two firmware variants. The same approach works for any optional features.
+This runtime detection approach means a single universal firmware handles both variants — a useful pattern whenever your hardware comes in multiple configurations.
 
 ### Configuration Options
 
@@ -127,13 +127,13 @@ zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
 zbLight.setLightColorTemperatureRange(154, 333);  // Mired values (154=6500K, 333=3000K)
 ```
 
-**Worked example** - This configures both endpoints ([`skyfan-zigbee.ino:426-435`](src/skyfan-zigbee/skyfan-zigbee.ino)):
+**Worked example** - The Skyfan configures both endpoints, with the light endpoint only configured if the hardware variant supports it (see [Creating Endpoints](#creating-endpoints) above for how `hasLight` is determined) ([`skyfan-zigbee.ino`](src/skyfan-zigbee/skyfan-zigbee.ino)):
 
 ```cpp
-#ifdef WITH_LIGHT
-zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
-zbLight.setLightColorTemperatureRange(ZIGBEE_COLOUR_TEMP_MIN_MIRED, ZIGBEE_COLOUR_TEMP_MAX_MIRED);
-#endif
+if (hasLight) {
+  zbLight.setLightColorCapabilities(ZIGBEE_COLOR_CAPABILITY_COLOR_TEMP);
+  zbLight.setLightColorTemperatureRange(ZIGBEE_COLOUR_TEMP_MIN_MIRED, ZIGBEE_COLOUR_TEMP_MAX_MIRED);
+}
 
 zbFanControl.setFanModeSequence(FAN_MODE_SEQUENCE_LOW_MED_HIGH);
 ```
@@ -160,26 +160,28 @@ void setup() {
 }
 ```
 
-**Worked example** - In the following snippet from the Skyfan controller, the setFan method is called when a zigbee fan mode message is received (a.k.a. change speed) and maps Zigbee modes to Tuya MCU commands ([`skyfan-zigbee.ino:64-99`](src/skyfan-zigbee/skyfan-zigbee.ino)):
+**Worked example** - When the Skyfan receives a Zigbee fan mode command, it translates the Zigbee mode into serial commands for the fan's internal MCU. The MCU speaks the Tuya serial protocol, where each function (power, speed, direction, etc.) is addressed by a numeric "data point ID" (DPID) ([`skyfan-zigbee.ino`](src/skyfan-zigbee/skyfan-zigbee.ino)):
 
 ```cpp
 void setFan(ZigbeeFanMode mode) {
   statusLed.flashCommand();  // Blink to show we got something
 
+  auto rollback = []() { zbFanControl.rollbackFanMode(); };
+
   switch (mode) {
     case FAN_MODE_OFF:
-      tuya.sendDataPointWithTracking(DP_FAN_SWITCH, DP_TYPE_BOOL, 0, CommandType::FAN_SWITCH);
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 0, rollback);
       break;
     case FAN_MODE_LOW:
-      tuya.sendDataPointWithTracking(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, CommandType::FAN_SWITCH);
-      tuya.sendDataPointWithTracking(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, CommandType::FAN_SPEED);
+      tuya.queueCommand(DP_FAN_SWITCH, DP_TYPE_BOOL, 1, rollback);
+      tuya.queueCommand(DP_FAN_SPEED, DP_TYPE_VALUE, FAN_SPEED_LOW_TUYA, rollback);
       break;
     // ... etc
   }
 }
 ```
 
-The `sendDataPointWithTracking` bit is Skyfan-specific (it tracks commands for rollback if the MCU doesn't respond). Your implementation will be whatever actually controls your device.
+The `queueCommand` with rollback callback is Skyfan-specific — commands are queued and sent sequentially to the fan's MCU over serial, with automatic rollback of the Zigbee attribute if the MCU doesn't confirm within a timeout. Your implementation will be whatever actually controls your device (GPIO, I2C, SPI, serial, etc.).
 
 ---
 
@@ -216,12 +218,12 @@ public:
 };
 ```
 
-**Worked example** - An extended class for Fans ([`SkyfanZigbee.h:30-69`](src/skyfan-zigbee/SkyfanZigbee.h)):
+**Worked example** - The Skyfan fan endpoint extends the base `ZigbeeEP` class directly (rather than `ZigbeeFanControl`) because it needed full control over cluster creation — it adds a manufacturer-specific cluster for fan direction alongside the standard ones. This is a more involved approach; for simpler cases, extending the specific endpoint class (as shown above) is easier ([`SkyfanZigbee.h:32-114`](src/skyfan-zigbee/SkyfanZigbee.h)):
 
 ```cpp
-class SkyfanZigbeeFanControl : public ZigbeeFanControl {
+class SkyfanZigbeeFanControl : public ZigbeeEP {
 public:
-  SkyfanZigbeeFanControl(uint8_t endpoint) : ZigbeeFanControl(endpoint) {}
+  SkyfanZigbeeFanControl(uint8_t endpoint);
 
   bool setFanMode(ZigbeeFanMode mode);
   bool setFanState(bool on);
@@ -240,14 +242,25 @@ void onPhysicalButtonPress() {
 }
 ```
 
-**Worked example** - Skyfan updates Zigbee when the MCU reports status ([`skyfan-zigbee.ino:164-212`](src/skyfan-zigbee/skyfan-zigbee.ino)):
+**Worked example** - The fan's MCU sends status reports whenever its state changes (e.g. someone used the physical remote). Each report contains a data point ID (DPID) and a value. The Skyfan firmware routes these to the appropriate Zigbee endpoint, which updates its attributes and reports the change to the coordinator ([`skyfan-zigbee.ino:200-223`](src/skyfan-zigbee/skyfan-zigbee.ino)):
 
 ```cpp
-void handleFanSpeedStatus(uint32_t value) {
-  uint8_t speed = static_cast<uint8_t>(value);
-  if (isValidTuyaFanSpeed(speed)) {
-    zbFanControl.setFanSpeed(speed);  // Update Zigbee attribute
-    lastConfirmedFanMode = speedToFanMode(speed);  // Track for rollback
+void onDeviceStatus(uint8_t dpid, uint32_t value) {
+  switch (dpid) {
+    case DP_FAN_SWITCH:
+    case DP_FAN_SPEED:
+    case DP_FAN_MODE:
+    case DP_FAN_DIRECTION:
+      zbFanControl.handleStatusUpdate(dpid, value);
+      break;
+
+    case DP_LIGHT_SWITCH:
+    case DP_LIGHT_DIMMER:
+    case DP_LIGHT_COLOUR_TEMP:
+      if (hasLight) {
+        zbLight.handleStatusUpdate(dpid, value);
+      }
+      break;
   }
 }
 ```
@@ -316,7 +329,7 @@ void setup() {
 }
 ```
 
-**Worked example** - This fan direction cluster ([`SkyfanZigbee.cpp`](src/skyfan-zigbee/SkyfanZigbee.cpp) and [`skyfan-zigbee.ino:558-579`](src/skyfan-zigbee/skyfan-zigbee.ino)) follows this exact pattern for the `FanDirection` attribute.
+**Worked example** - The fan direction cluster ([`SkyfanZigbee.cpp:158-205`](src/skyfan-zigbee/SkyfanZigbee.cpp)) follows this pattern. The custom cluster write handler is in [`SkyfanZigbee.cpp:236-244`](src/skyfan-zigbee/SkyfanZigbee.cpp), and the callback is registered in [`skyfan-zigbee.ino:325`](src/skyfan-zigbee/skyfan-zigbee.ino).
 
 ---
 
@@ -367,12 +380,13 @@ Use Espressif's `image_builder_tool.py`:
 
 ```bash
 python image_builder_tool.py \
-  --create firmware.ota \
-  --tag-file firmware.bin \
-  --version 0x0008F000 \
-  --manuf-id 0x1818 \
-  --image-type 0x0001
+  -m 0x1818 \
+  -i 0x0001 \
+  -v 0x0008F000 \
+  --tag 0 firmware.bin
 ```
+
+Note: the tool auto-generates the output filename based on the input. Rename the output `.ota` file as needed.
 
 ---
 
@@ -407,7 +421,7 @@ export default {
 };
 ```
 
-**Worked example** - This ([`zigbee2mqtt/skyfanConverter.mjs`](zigbee2mqtt/skyfanConverter.mjs)) adds a custom cluster definition for fan direction and configures two endpoints.
+**Worked example** - The Skyfan converter ([`zigbee2mqtt/skyfanConverter.mjs`](zigbee2mqtt/skyfanConverter.mjs)) is a single unified file that defines the custom fan direction cluster, configures both fan and light endpoints, and handles the manufacturer-specific attributes.
 
 ### Custom Clusters in Converters
 
