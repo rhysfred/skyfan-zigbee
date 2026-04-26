@@ -204,10 +204,10 @@ jobs:
 
           # Dev builds include debug logging; release builds do not
           if [[ "${{ needs.prepare.outputs.is_dev }}" == "true" ]]; then
-            EXTRA_FLAGS="-DWITH_LIGHT -D__DEBUG__ -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
+            EXTRA_FLAGS="-D__DEBUG__ -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
             echo "Dev build: Debug logging ENABLED"
           else
-            EXTRA_FLAGS="-DWITH_LIGHT -DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
+            EXTRA_FLAGS="-DFIRMWARE_VERSION=\"${{ needs.prepare.outputs.version }}\" -DOTA_FILE_VERSION=${{ needs.prepare.outputs.ota_version }}"
             echo "Release build: Debug logging DISABLED"
           fi
 

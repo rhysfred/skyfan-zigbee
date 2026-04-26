@@ -102,6 +102,7 @@ bool SkyfanZigbeeLight::setLightLevelDirect(uint8_t level) {
 }
 
 bool SkyfanZigbeeLight::setLightColorTemperatureDirect(uint16_t mired) {
+  if (getLightColorTemperature() == mired) return true;
   _suppressCallback = true;
   bool result = setLightColorTemperature(mired);
   _suppressCallback = false;
@@ -125,7 +126,6 @@ void SkyfanZigbeeLight::handleStatusUpdate(uint8_t dpid, uint32_t value) {
       }
 
       confirmLightState(lightOn);
-      reportLightState();
       Log::info("Light switch set to %s (%d) by Skyfan", lightOn ? "ON" : "OFF", lightOn ? 1 : 0);
       break;
     }
@@ -157,7 +157,6 @@ void SkyfanZigbeeLight::handleStatusUpdate(uint8_t dpid, uint32_t value) {
       }
 
       confirmLightLevel(zigbeeBrightness);
-      reportLightLevel();
       Log::info("Light brightness set to %d (Zigbee: %d) by Skyfan", tuyaBrightness, zigbeeBrightness);
       break;
     }
@@ -180,7 +179,6 @@ void SkyfanZigbeeLight::handleStatusUpdate(uint8_t dpid, uint32_t value) {
       }
 
       confirmColorTemp(colourTempMired);
-      reportLightColorTemp();
       Log::info("Light colour temp set to %d mired (%dK) by Skyfan", colourTempMired, miredToKelvin(colourTempMired));
       break;
     }

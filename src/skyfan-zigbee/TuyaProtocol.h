@@ -25,6 +25,9 @@
 // Rollback callback type for command queue
 using RollbackCallback = std::function<void()>;
 
+// Breakout check callback type - returns true if breakout requested
+using BreakoutCheck = bool(*)();
+
 // Queue configuration
 #define COMMAND_QUEUE_SIZE 16
 
@@ -146,6 +149,10 @@ private:
   // Radio connection state (set via setRadioConnected(), used by processResponse())
   bool radioConnected;
 
+  // Heartbeat callback (fires on each heartbeat processed via processResponse())
+  using HeartbeatCallback = std::function<void(bool isRestart)>;
+  HeartbeatCallback heartbeatCallback = nullptr;
+
   // Rollback guard - prevents re-entrant command queueing during rollback
   bool rollbackInProgress = false;
 
@@ -164,14 +171,16 @@ private:
   // Heartbeat packet length (header + checksum, no data)
   static constexpr uint8_t HEARTBEAT_PACKET_LENGTH = 7;
 
-  // Product info (parsed from MCU init sequence, not actively queried)
+  // Product info (parsed from MCU init sequence)
   char _productId[32];
+  bool _suppressProductInfoAck = false;  // Suppress ack during waitForProductInfo()
   void parseProductInfo(uint8_t* data, uint16_t len);
+  void ackProductInfo();  // Sends 0x01 as acknowledgement (called from processResponse)
 
   // Packet state machine - processes one byte, returns true when packet complete
   bool processByte(uint8_t byte);
 
-  // Helper for connect() - sends heartbeat, captures response bytes
+  // Helper for connect/negotiate - sends heartbeat, captures response bytes
   HeartbeatResult checkHeartbeat();
 
 public:
@@ -181,23 +190,28 @@ public:
   void setRadioConnected(bool connected);
   void update();
 
-  // Connect to MCU - handles baud rate verification or negotiation
-  // If baudRate > 0: verify connection at that rate (5 attempts)
-  //   Returns baudRate on success, 0 on failure
-  // If baudRate == 0: negotiate baud rate (try 9600, then 115200)
-  //   Returns negotiated rate on success, -1 on failure
-  int32_t connect(uint32_t baudRate = 0);
-  
+  // Connect to MCU using persisted baud rate - loops heartbeats until response or breakout
+  // Returns true on heartbeat success, false on breakout
+  bool connect(uint32_t baudRate, BreakoutCheck breakoutCheck);
+
+  // Negotiate baud rate - cycles 9600/115200 indefinitely until success or breakout
+  // Outputs cycle count via cyclesUsed. Returns baud rate on success, -1 on breakout
+  int32_t negotiateBaud(BreakoutCheck breakoutCheck, uint8_t& cyclesUsed);
+
   // Core protocol functions
   void sendCommand(uint8_t cmd, uint8_t* data, uint16_t len);
   void sendHeartbeat();
   void sendNetworkStatus(uint8_t status);
-  void sendProductInfo();
+  void queryProductInfo();
+  bool waitForProductInfo(unsigned long timeoutMs);
   void sendWorkMode();
   void sendDatapointQuery();
 
   // Product info (parsed from MCU init sequence)
   const char* getProductId() const;
+
+  // Heartbeat callback
+  void setHeartbeatCallback(HeartbeatCallback callback);
 
   // Status functions
   bool isConnected() const;

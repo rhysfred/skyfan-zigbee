@@ -1,16 +1,30 @@
-import {access, presets} from "zigbee-herdsman-converters/lib/exposes";
-import * as m from "zigbee-herdsman-converters/lib/modernExtend";
-import * as reporting from "zigbee-herdsman-converters/lib/reporting";
 import {Zcl} from "zigbee-herdsman";
 
-const e = presets;
+import * as exposes from "../lib/exposes";
+import * as m from "../lib/modernExtend";
+import * as reporting from "../lib/reporting";
+import type {DefinitionWithExtend, Fz, Tz, Zh} from "../lib/types";
 
-// Front Left Speaker manufacturer-specific constants
+const e = exposes.presets;
+const ea = exposes.access;
+
+// Front Left Speaker manufacturer-specific constants. These are made up and
+// should really be registered
 const FLS_MANUFACTURER_CODE = 0x1818;
-const CUSTOM_CLUSTER_ID = 0xFC00;
+const CUSTOM_CLUSTER_ID = 0xfc00;
 const FAN_DIRECTION_ATTR_ID = 0x0001;
 
 const manufacturerOptions = {manufacturerCode: FLS_MANUFACTURER_CODE};
+
+interface FanExtensions {
+    attributes: {
+        fanDirection: number;
+    };
+    commands: never;
+    commandResponses: never;
+}
+
+const fanModeMap: Record<number, string> = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"};
 
 // Custom fromZigbee converters for fan clusters
 const fzLocal = {
@@ -19,12 +33,11 @@ const fzLocal = {
         type: ["attributeReport", "readResponse"],
         convert: (model, msg, publish, options, meta) => {
             if (msg.data.fanMode !== undefined) {
-                const fanModeMap = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"};
                 const mode = fanModeMap[msg.data.fanMode] ?? "off";
                 return {fan_mode: mode, fan_state: mode === "off" ? "OFF" : "ON"};
             }
         },
-    },
+    } satisfies Fz.Converter<"hvacFanCtrl", undefined, ["attributeReport", "readResponse"]>,
     fan_direction: {
         cluster: "fanExtensions",
         type: ["attributeReport", "readResponse"],
@@ -34,42 +47,44 @@ const fzLocal = {
                 return {fan_direction: direction};
             }
         },
-    },
+    } satisfies Fz.Converter<"fanExtensions", FanExtensions, ["attributeReport", "readResponse"]>,
 };
 
 const tzLocal = {
     fan_mode: {
         key: ["fan_mode"],
         convertSet: async (entity, key, value, meta) => {
-            const modeMap = {off: 0, low: 1, medium: 2, high: 3, on: 4, auto: 5, smart: 6};
-            await entity.write("hvacFanCtrl", {fanMode: modeMap[value] ?? 0});
+            const modeMap: Record<string, number> = {off: 0, low: 1, medium: 2, high: 3, on: 4, auto: 5, smart: 6};
+            await entity.write("hvacFanCtrl", {fanMode: modeMap[value as string] ?? 0});
             return {state: {fan_mode: value, fan_state: value === "off" ? "OFF" : "ON"}};
         },
         convertGet: async (entity, key, meta) => {
             await entity.read("hvacFanCtrl", ["fanMode"]);
         },
-    },
+    } satisfies Tz.Converter,
     fan_direction: {
         key: ["fan_direction"],
         convertSet: async (entity, key, value, meta) => {
             const directionValue = value === "forward" ? 0 : 1;
-            await entity.write("fanExtensions", {fanDirection: directionValue}, manufacturerOptions);
+            await entity.write<"fanExtensions", FanExtensions>("fanExtensions", {fanDirection: directionValue}, manufacturerOptions);
             return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
-            await entity.read("fanExtensions", ["fanDirection"], manufacturerOptions);
+            await entity.read<"fanExtensions", FanExtensions>("fanExtensions", ["fanDirection"], manufacturerOptions);
         },
-    },
+    } satisfies Tz.Converter,
 };
 
 // Shared custom cluster extension for fan direction
 const fanExtensionsCluster = m.deviceAddCustomCluster("fanExtensions", {
     ID: CUSTOM_CLUSTER_ID,
+    name: "fanExtensions",
     manufacturerCode: FLS_MANUFACTURER_CODE,
     attributes: {
         fanDirection: {
             ID: FAN_DIRECTION_ATTR_ID,
             type: Zcl.DataType.ENUM8,
+            name: "fanDirection",
         },
     },
     commands: {},
@@ -78,13 +93,13 @@ const fanExtensionsCluster = m.deviceAddCustomCluster("fanExtensions", {
 
 const fanExposes = [
     e.fan().withModes(["off", "low", "medium", "high", "on"]),
-    e.enum("fan_direction", access.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction"),
+    e.enum("fan_direction", ea.ALL, ["forward", "reverse"]).withDescription("Fan rotation direction"),
 ];
 
 const fanFromZigbee = [fzLocal.fan_mode, fzLocal.fan_direction];
 const fanToZigbee = [tzLocal.fan_mode, tzLocal.fan_direction];
 
-async function configureFan(device, coordinatorEndpoint) {
+async function configureFan(device: Zh.Device, coordinatorEndpoint: Zh.Endpoint) {
     const fanEndpoint = device.getEndpoint(1);
 
     await reporting.bind(fanEndpoint, coordinatorEndpoint, ["hvacFanCtrl", "fanExtensions"]);
@@ -96,25 +111,15 @@ async function configureFan(device, coordinatorEndpoint) {
     }
 
     try {
-        await fanEndpoint.configureReporting("fanExtensions", [
-            {
-                attribute: "fanDirection",
-                minimumReportInterval: 1,
-                maximumReportInterval: 3600,
-                reportableChange: 1,
-            },
+        await fanEndpoint.configureReporting<"fanExtensions", FanExtensions>("fanExtensions", [
+            {attribute: "fanDirection", minimumReportInterval: 1, maximumReportInterval: 3600, reportableChange: 1},
         ]);
     } catch {
         // Fan direction reporting not supported, using binding only
     }
 }
 
-// OTA updates from GitHub releases
-// User must add the following to their Zigbee2MQTT configuration.yaml:
-// ota:
-//   zigbee_ota_override_index_location: https://raw.githubusercontent.com/rhysfred/skyfan-zigbee/main/zigbee2mqtt/ota-index.json
-
-export default [
+export const definitions: DefinitionWithExtend[] = [
     {
         zigbeeModel: ["Ventair Skyfan/Light ZB Adaptor"],
         model: "Ventair Skyfan/Light ZB Adaptor",
@@ -165,10 +170,7 @@ export default [
         model: "Ventair Skyfan ZB Adaptor",
         vendor: "Front Left Speaker",
         description: "Ventair Skyfan ceiling fan controller (fan only)",
-        extend: [
-            fanExtensionsCluster,
-            m.deviceEndpoints({endpoints: {fan: 1}}),
-        ],
+        extend: [fanExtensionsCluster, m.deviceEndpoints({endpoints: {fan: 1}})],
         exposes: fanExposes,
         fromZigbee: fanFromZigbee,
         toZigbee: fanToZigbee,

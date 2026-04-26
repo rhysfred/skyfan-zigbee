@@ -17,13 +17,20 @@
 
 #include "PersistedProperties.h"
 #include "Logger.h"
+#include "esp_system.h"
 
 PersistedProperties::PersistedProperties()
   : _mcuBaudRate(0),
+    _baudNegotiationCycles(0),
     _powerOnLightState(-1),
     _powerOnLightColourTemp(-1),
-    _bootIdx(0) {
+    _bootIdx(0),
+    _mcuRestarts(0),
+    _zigbeeModuleRestarts(0),
+    _lastResetReason(0),
+    _skipNextMcuRestart(true) {
   _productId[0] = '\0';
+  _productIdMismatch[0] = '\0';
 }
 
 void PersistedProperties::begin() {
@@ -36,6 +43,12 @@ void PersistedProperties::begin() {
   if (prefs.isKey(KEY_MCU_BAUD)) {
     _mcuBaudRate = prefs.getUInt(KEY_MCU_BAUD, 0);
     Log::debug("Loaded mcuBaudRate from NVS: %lu", _mcuBaudRate);
+  }
+
+  // Load baud negotiation cycles (0 if not set)
+  if (prefs.isKey(KEY_BAUD_CYCLES)) {
+    _baudNegotiationCycles = prefs.getUChar(KEY_BAUD_CYCLES, 0);
+    Log::debug("Loaded baudNegotiationCycles from NVS: %d", _baudNegotiationCycles);
   }
 
   // Load power-on light state (-1 if not set)
@@ -62,7 +75,58 @@ void PersistedProperties::begin() {
     Log::debug("Loaded productId from NVS: %s", _productId);
   }
 
+  // Load product ID mismatch (empty string if not set)
+  if (prefs.isKey(KEY_PID_MISMATCH)) {
+    prefs.getString(KEY_PID_MISMATCH, _productIdMismatch, sizeof(_productIdMismatch));
+    Log::debug("Loaded pidMismatch from NVS: %s", _productIdMismatch);
+  }
+
+  // Load restart counters
+  bool mcuRestartKeyExists = prefs.isKey(KEY_MCU_RESTARTS);
+  if (mcuRestartKeyExists) {
+    _mcuRestarts = prefs.getUInt(KEY_MCU_RESTARTS, 0);
+    _skipNextMcuRestart = false;
+  } else {
+    _mcuRestarts = 0;
+    _skipNextMcuRestart = true;
+  }
+
+  bool zbRestartKeyExists = prefs.isKey(KEY_ZB_RESTARTS);
+  if (zbRestartKeyExists) {
+    _zigbeeModuleRestarts = prefs.getUInt(KEY_ZB_RESTARTS, 0);
+    _zigbeeModuleRestarts++;
+  } else {
+    _zigbeeModuleRestarts = 0;
+  }
+
+  // Load previous reset reason (0 = unknown/not set)
+  if (prefs.isKey(KEY_LAST_RESET)) {
+    _lastResetReason = prefs.getUChar(KEY_LAST_RESET, 0);
+    Log::debug("Previous reset reason: %s", resetReasonToString(_lastResetReason));
+  }
+
   prefs.end();
+
+  // Write restart counters (need read-write access)
+  if (!openNvsForWriting()) return;
+
+  if (zbRestartKeyExists) {
+    prefs.putUInt(KEY_ZB_RESTARTS, _zigbeeModuleRestarts);
+    Log::debug("Zigbee module restarts: %lu", _zigbeeModuleRestarts);
+  } else {
+    prefs.putUInt(KEY_ZB_RESTARTS, 0);
+    Log::debug("Zigbee module restarts counter initialised");
+  }
+
+  if (!mcuRestartKeyExists) {
+    prefs.putUInt(KEY_MCU_RESTARTS, 0);
+    Log::debug("MCU restarts counter initialised");
+  }
+
+  // Save current reset reason for next boot's diagnostics
+  prefs.putUChar(KEY_LAST_RESET, static_cast<uint8_t>(esp_reset_reason()));
+
+  closeNvs();
 }
 
 void PersistedProperties::clearAll() {
@@ -78,10 +142,16 @@ void PersistedProperties::clearAll() {
 
   // Reset in-memory cache
   _mcuBaudRate = 0;
+  _baudNegotiationCycles = 0;
   _powerOnLightState = -1;
   _powerOnLightColourTemp = -1;
   _bootIdx = 0;
   _productId[0] = '\0';
+  _productIdMismatch[0] = '\0';
+  _mcuRestarts = 0;
+  _zigbeeModuleRestarts = 0;
+  _lastResetReason = 0;
+  _skipNextMcuRestart = true;
 }
 
 // NVS write helpers
@@ -115,12 +185,20 @@ void PersistedProperties::setMcuBaudRate(uint32_t baudRate) {
   closeNvs();
 }
 
-void PersistedProperties::clearMcuBaudRate() {
-  _mcuBaudRate = 0;
+// Baud Negotiation Cycles
+uint8_t PersistedProperties::getBaudNegotiationCycles() const {
+  return _baudNegotiationCycles;
+}
+
+void PersistedProperties::setBaudNegotiationCycles(uint8_t cycles) {
+  _baudNegotiationCycles = cycles;
   if (!openNvsForWriting()) return;
 
-  prefs.remove(KEY_MCU_BAUD);
-  Log::info("Cleared persisted MCU baud rate from NVS");
+  if (prefs.putUChar(KEY_BAUD_CYCLES, cycles) == 0) {
+    Log::error("Failed to write baudNegotiationCycles to NVS");
+  } else {
+    Log::debug("Wrote baudNegotiationCycles to NVS: %d", cycles);
+  }
 
   closeNvs();
 }
@@ -181,6 +259,102 @@ void PersistedProperties::setProductId(const char* id) {
   }
 
   closeNvs();
+}
+
+// Product ID Mismatch
+const char* PersistedProperties::getProductIdMismatch() const {
+  return _productIdMismatch;
+}
+
+void PersistedProperties::setProductIdMismatch(const char* id) {
+  strncpy(_productIdMismatch, id, sizeof(_productIdMismatch) - 1);
+  _productIdMismatch[sizeof(_productIdMismatch) - 1] = '\0';
+
+  if (!openNvsForWriting()) return;
+
+  if (prefs.putString(KEY_PID_MISMATCH, _productIdMismatch) == 0) {
+    Log::error("Failed to write pidMismatch to NVS");
+  } else {
+    Log::debug("Wrote pidMismatch to NVS: %s", _productIdMismatch);
+  }
+
+  closeNvs();
+}
+
+// Restart metrics
+uint32_t PersistedProperties::getMcuRestarts() const {
+  return _mcuRestarts;
+}
+
+uint32_t PersistedProperties::getZigbeeModuleRestarts() const {
+  return _zigbeeModuleRestarts;
+}
+
+uint8_t PersistedProperties::getLastResetReason() const {
+  return _lastResetReason;
+}
+
+const char* PersistedProperties::resetReasonToString(uint8_t reason) {
+  switch (static_cast<esp_reset_reason_t>(reason)) {
+    case ESP_RST_POWERON:   return "Power-on";
+    case ESP_RST_SW:        return "Software reset";
+    case ESP_RST_PANIC:     return "Exception/panic";
+    case ESP_RST_INT_WDT:   return "Interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "Task watchdog";
+    case ESP_RST_WDT:       return "Other watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep sleep wake";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Unknown";
+  }
+}
+
+void PersistedProperties::onMcuHeartbeat(bool isRestart) {
+  if (_skipNextMcuRestart) {
+    _skipNextMcuRestart = false;
+    if (isRestart) return;
+  }
+  if (!isRestart) return;
+
+  _mcuRestarts++;
+  if (!openNvsForWriting()) return;
+  prefs.putUInt(KEY_MCU_RESTARTS, _mcuRestarts);
+  closeNvs();
+  Log::info("MCU restart detected (total: %lu)", _mcuRestarts);
+}
+
+// Diagnostics - dump all persisted fields
+void PersistedProperties::dumpAll() const {
+  Log::info("=== Persisted Properties ===");
+  if (_mcuBaudRate > 0) {
+    Log::info("MCU baud rate: %lu", _mcuBaudRate);
+  } else {
+    Log::info("MCU baud rate: not set");
+  }
+  if (_baudNegotiationCycles > 0) {
+    Log::info("Baud negotiation cycles: %d", _baudNegotiationCycles);
+  } else {
+    Log::info("Baud negotiation cycles: not set");
+  }
+  Log::info("Product ID: %s", _productId[0] != '\0' ? _productId : "not set");
+  if (_productIdMismatch[0] != '\0') {
+    Log::info("Product ID mismatch: %s", _productIdMismatch);
+  }
+  Log::info("MCU restarts: %lu", _mcuRestarts);
+  Log::info("Zigbee module restarts: %lu", _zigbeeModuleRestarts);
+  Log::info("Current reset reason: %s", resetReasonToString(static_cast<uint8_t>(esp_reset_reason())));
+  Log::info("Previous reset reason: %s", _lastResetReason != 0 ? resetReasonToString(_lastResetReason) : "not available");
+  Log::info("Power-on light state: %s",
+    _powerOnLightState < 0 ? "not set" : (_powerOnLightState ? "on" : "off"));
+  if (_powerOnLightColourTemp < 0) {
+    Log::info("Power-on light colour temp: not set");
+  } else {
+    Log::info("Power-on light colour temp: %d", _powerOnLightColourTemp);
+  }
+#ifdef __BOOT_LOG__
+  dumpBootLogs();
+#endif
+  Log::info("=== End Persisted Properties ===");
 }
 
 // Boot Log - circular buffer write

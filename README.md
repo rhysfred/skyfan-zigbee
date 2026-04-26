@@ -10,10 +10,10 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 
 ## Features
 
-### Build Configuration
-- **Dual Model Support**: Configurable build for fan-only or fan+light models
-- **Conditional Compilation**: `WITH_LIGHT` define controls light functionality inclusion
+### Automatic Model Detection
+- **Runtime Detection**: Single universal firmware detects fan-only or fan+light models from MCU product ID
 - **Model Variants**: "Ventair Skyfan ZB Adaptor" (fan-only) or "Ventair Skyfan/Light ZB Adaptor" (fan+light)
+- **Safe Default**: Defaults to fan+light if product ID is unavailable
 
 ### Fan Control
 - **Power**: On/Off control
@@ -21,14 +21,14 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 - **Mode**: Normal, Eco, Sleep (MCU-only, not exposed to Zigbee)
 - **Direction**: Forward/Reverse (custom Zigbee attribute)
 
-### Light Control (WITH_LIGHT enabled)
+### Light Control (fan+light models)
 - **Power**: On/Off control
 - **Brightness**: 6 levels (0-5) mapped to Zigbee brightness (0-254)
 - **Colour Temperature**: 3 settings (Warm 3000K / Natural 4200K / Cool 6500K)
 
 ### Zigbee Integration
 - **Protocol**: Zigbee 3.0 Router mode
-- **Endpoints**: Fan control (EP1), optional light control (EP2) when WITH_LIGHT enabled
+- **Endpoints**: Fan control (EP1), optional light control (EP2) on fan+light models
 - **Bidirectional**: Status updates flow both directions (Zigbee ↔ MCU)
 - **Standards Compliant**: Uses standard Zigbee Fan Control and Colour Dimmable Light clusters with manufacturer extension for fan direction
 
@@ -104,8 +104,7 @@ skyfan-zigbee/
 │       ├── PersistedProperties.cpp # NVS-backed persistent property storage implementation
 │       └── Logger.h               # Centralised logging utilities
 ├── zigbee2mqtt/
-│   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for fan+light models
-│   ├── skyfanFanOnlyConverter.mjs # Zigbee2MQTT converter for fan-only models
+│   ├── skyfanConverter.mjs        # Zigbee2MQTT converter for both fan+light and fan-only models
 │   └── ota-index.json             # OTA firmware index for Zigbee2MQTT (auto-updated on release)
 ├── electronics/
 │   ├── gerber/                    # PCB manufacturing files (Gerber, drill, silkscreen)
@@ -121,7 +120,7 @@ skyfan-zigbee/
 
 ### Tuya Serial Protocol
 - **Frame Format**: `0x55AA + Version + Command + Length + Data + Checksum`
-- **Baud Rate**: Auto-negotiated (tries 9600 first per Tuya spec, falls back to 115200)
+- **Baud Rate**: Auto-negotiated (cycles 9600/115200 indefinitely until MCU responds; persisted to NVS on success)
 - **Checksum Validation**: All incoming packets validated before processing
 - **Data Points**: Boolean, Value, and Enum types for different controls
 
@@ -138,29 +137,23 @@ skyfan-zigbee/
 
 ## Installation
 
-1. **Configure Build Type**:
-   - Open `src/skyfan-zigbee/SkyfanConfig.h`
-   - For fan+light models: Keep `#define WITH_LIGHT` uncommented
-   - For fan-only models: Comment out `#define WITH_LIGHT`
-
-2. **Configure Arduino IDE**:
+1. **Configure Arduino IDE**:
    - Install ESP32 board package by Expressif (v3.3.5 or later)
    - Select your ESP32C6 board e.g. "XIAO_ESP32C6" or "Adafruit Feather ESP32-C6". If using a board other than the XIAO one, double-check the pinouts in this sketch
    - Set "Partition Scheme" to "Zigbee ZCZR 4MB with spiffs"
    - Set "Zigbee Mode" to "Zigbee ZCZR (coordinator/router)"
 
-3. **Upload Firmware**:
+2. **Upload Firmware**:
    ```bash
    # Open src/skyfan-zigbee/skyfan-zigbee.ino in Arduino IDE
    # Verify and upload to ESP32-C6
    ```
 
-4. **Configure Zigbee2MQTT**:
-   - For fan+light models: Use `zigbee2mqtt/skyfanConverter.mjs`
-   - For fan-only models: Use `zigbee2mqtt/skyfanFanOnlyConverter.mjs`
-   - Copy the appropriate converter to your Zigbee2MQTT external converters directory
+3. **Configure Zigbee2MQTT**:
+   - Copy `zigbee2mqtt/skyfanConverter.mjs` to your Zigbee2MQTT external converters directory
+   - This single converter handles both fan+light and fan-only models automatically
 
-5. **Hardware Connections**:
+4. **Hardware Connections**:
    - Connect ESP32 UART to MCU UART (TX↔RX, RX↔TX)
    - Common ground connection
    - Power ESP32 from appropriate source
@@ -171,7 +164,7 @@ skyfan-zigbee/
 1. Power on the device
 2. Device enters Zigbee joining mode automatically
 3. Use Zigbee coordinator to permit joining and discover device
-4. Endpoints discovered depend on build configuration:
+4. Endpoints discovered depend on detected model:
    - Fan+Light: Two endpoints (Fan Control and Light Control)
    - Fan-Only: Single endpoint (Fan Control only)
 
@@ -216,23 +209,14 @@ class SkyfanZigbeeFanControl : public ZigbeeEP {
 
 ## Configuration
 
-### Build Configuration
-Before compiling, configure the target device type in `SkyfanConfig.h`:
+### Model Detection
+The firmware automatically detects the connected fan model at runtime using the MCU's product ID. No build configuration is required.
 
-```cpp
-// === Feature Configuration ===
-#define WITH_LIGHT  // Comment out to disable light functionality
-```
+- **Known light model** (`pktxz1vynowmavuc`): Registers fan + light endpoints, model name "Ventair Skyfan/Light ZB Adaptor"
+- **Other product IDs**: Registers fan endpoint only, model name "Ventair Skyfan ZB Adaptor"
+- **No product ID available**: Defaults to fan+light for safety
 
-**Fan+Light Model** (WITH_LIGHT defined):
-- Model: "Ventair Skyfan/Light ZB Adaptor"  
-- Includes light endpoint and controls
-- Use `skyfanConverter.mjs` for Zigbee2MQTT
-
-**Fan-Only Model** (WITH_LIGHT undefined):
-- Model: "Ventair Skyfan ZB Adaptor"
-- Fan controls only, smaller firmware size
-- Use `skyfanFanOnlyConverter.mjs` for Zigbee2MQTT
+The detected product ID is cached in NVS and persists across reboots. Use the serial `p` command to view the stored product ID.
 
 ### Serial Protocol
 - **Heartbeat**: 10-second intervals
@@ -347,9 +331,14 @@ Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial 
 ### Serial Debug Commands
 While connected to the debug serial port, the following single-character commands are available:
 
-- **`r`** / **`R`**: Clear the persisted MCU baud rate from NVS. The baud rate will be re-negotiated on next boot.
-- **`p`** / **`P`**: Display the stored product ID from NVS (parsed from MCU init sequence).
-- **`b`** / **`B`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
+#### During startup (MCU negotiation/reconnect only)
+- **`b`** / **`B`**: Breakout — abort MCU communication and start Zigbee with defaults (fan+light). The device will be reachable for diagnostics and factory reset via Zigbee2MQTT, but all state change commands will be rejected and rolled back. MCU communication is skipped for the remainder of the session.
+
+#### During normal operation
+- **`s`** / **`S`**: Dump all persisted properties from NVS (baud rate, negotiation cycles, product ID, restart counters, etc.)
+- **`l`** / **`L`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
+- **`c`** / **`C`**: Clear all persisted data from NVS.
+- **`r`** / **`R`**: Factory reset — clears NVS and resets Zigbee network state.
 
 ## License
 

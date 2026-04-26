@@ -33,6 +33,11 @@ private:
   static constexpr const char* KEY_BOOT_IDX = "bootIdx";
   static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
   static constexpr const char* KEY_PRODUCT_ID = "productId";
+  static constexpr const char* KEY_PID_MISMATCH = "pidMismatch";
+  static constexpr const char* KEY_BAUD_CYCLES = "baudCycles";
+  static constexpr const char* KEY_MCU_RESTARTS = "mcuRestarts";
+  static constexpr const char* KEY_ZB_RESTARTS = "zbRestarts";
+  static constexpr const char* KEY_LAST_RESET = "lastReset";
   static constexpr uint8_t BOOT_LOG_SLOTS = 5;
 
   // NVS write helpers
@@ -41,10 +46,18 @@ private:
 
   // In-memory cache
   uint32_t _mcuBaudRate;           // 0 = not set
+  uint8_t _baudNegotiationCycles;  // 0 = not set
   int8_t _powerOnLightState;       // -1 = not set, 0 = off, 1 = on
   int8_t _powerOnLightColourTemp;  // -1 = not set, 0-2 = temp value
   uint8_t _bootIdx;                // 0 = uninitialised, 1-5 = last written slot
   char _productId[32];             // Empty string = not set
+  char _productIdMismatch[32];     // Empty string = no mismatch detected
+  uint32_t _mcuRestarts;            // Count of MCU restart heartbeats
+  uint32_t _zigbeeModuleRestarts;   // Count of Zigbee module restarts
+  uint8_t _lastResetReason;         // Previous boot's reset reason (esp_reset_reason_t)
+  bool _skipNextMcuRestart;         // True when mcuRestarts key was just created (or cleared)
+
+  static const char* resetReasonToString(uint8_t reason);
 
 public:
   PersistedProperties();
@@ -55,7 +68,10 @@ public:
   // MCU Baud Rate (returns 0 if not set)
   uint32_t getMcuBaudRate() const;
   void setMcuBaudRate(uint32_t baudRate);
-  void clearMcuBaudRate();
+
+  // Baud negotiation cycles (returns 0 if not set)
+  uint8_t getBaudNegotiationCycles() const;
+  void setBaudNegotiationCycles(uint8_t cycles);
 
   // Power-on Light State (returns -1 if not set, 0=off, 1=on)
   int8_t getPowerOnLightState() const;
@@ -68,6 +84,19 @@ public:
   // Product ID (returns empty string if not set)
   const char* getProductId() const;
   void setProductId(const char* id);
+
+  // Product ID mismatch (diagnostic - returns empty string if no mismatch)
+  const char* getProductIdMismatch() const;
+  void setProductIdMismatch(const char* id);
+
+  // Restart metrics
+  uint32_t getMcuRestarts() const;
+  uint32_t getZigbeeModuleRestarts() const;
+  uint8_t getLastResetReason() const;
+  void onMcuHeartbeat(bool isRestart);
+
+  // Diagnostics
+  void dumpAll() const;
 
   // Boot log persistence (circular buffer of BOOT_LOG_SLOTS entries)
   void writeBootLog(const char* logData);

@@ -71,7 +71,8 @@ bool SkyfanZigbeeFanControl::setFanModeSequence(ZigbeeFanModeSequence sequence) 
 }
 
 bool SkyfanZigbeeFanControl::setFanMode(ZigbeeFanMode mode) {
-  // Always track intended mode (needed for confirmed state even before Zigbee.begin())
+  if (_current_fan_mode == mode) return true;
+
   _current_fan_mode = mode;
 
   // Update Zigbee attribute (works after Zigbee.begin(), fails silently before)
@@ -125,7 +126,9 @@ bool SkyfanZigbeeFanControl::setFanDirection(uint8_t direction) {
   if (direction > static_cast<uint8_t>(FanDirection::REVERSE)) {
     return false;
   }
-  
+
+  if (getFanDirection() == direction) return true;
+
   // Update the manufacturer-specific cluster attribute
   if (customCluster && customClusterRegistered) {
     esp_zb_zcl_status_t ret = esp_zb_zcl_set_manufacturer_attribute_val(_endpoint, VENTAIR_CUSTOM_CLUSTER_ID,
@@ -394,7 +397,6 @@ void SkyfanZigbeeFanControl::handleStatusUpdate(uint8_t dpid, uint32_t value) {
                  _endpoint, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)_current_fan_mode);
 
       confirmFanMode(_current_fan_mode);
-      reportFanMode();
       Log::info("Fan switch set to %s (%d) by Skyfan", fanOn ? "ON" : "OFF", fanOn ? 1 : 0);
       break;
     }
@@ -415,7 +417,6 @@ void SkyfanZigbeeFanControl::handleStatusUpdate(uint8_t dpid, uint32_t value) {
       }
 
       confirmFanMode(_current_fan_mode);
-      reportFanMode();
       Log::info("Fan speed set to %d by Skyfan", speed);
       break;
     }
@@ -447,7 +448,6 @@ void SkyfanZigbeeFanControl::handleStatusUpdate(uint8_t dpid, uint32_t value) {
       }
 
       confirmFanDirection(direction);
-      reportFanDirection();
       Log::info("Fan direction set to %s (%d) by Skyfan",
         (direction == static_cast<uint8_t>(FanDirection::FORWARD)) ? "FORWARD" : "REVERSE", direction);
       break;
