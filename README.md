@@ -6,7 +6,7 @@ A Zigbee 3.0 controller for Ventair Skyfan ceiling fans with integrated lighting
 
 This project implements a Zigbee interface for Ventair Skyfan ceiling fans that use Tuya MCU controllers. It provides bidirectional communication between the Zigbee network and the fan's MCU, enabling control and status reporting for both fan and integrated lighting functions.
 
-**Status**: Version 1.0.0. Tested with a Skyfan DC with Light.
+**Status**: Version 2.0.0. Tested with a Skyfan DC with Light.
 
 ## Features
 
@@ -35,7 +35,7 @@ This project implements a Zigbee interface for Ventair Skyfan ceiling fans that 
 ### Visual Feedback
 - **Network Status LED**: Visual indication of Zigbee connection state
 - **Command Feedback**: LED flashes for 50ms on Zigbee commands with 15ms off period for overlapping commands
-- **Factory Reset**: Hold BOOT button for 3+ seconds to reset Zigbee settings
+- **Factory Reset**: Hold BOOT button for 3+ seconds to reset Zigbee and all persisted settings
 
 ### OTA Updates
 - **Zigbee OTA**: Firmware updates over Zigbee via Zigbee2MQTT
