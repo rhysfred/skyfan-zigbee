@@ -138,6 +138,44 @@ if (hasLight) {
 zbFanControl.setFanModeSequence(FAN_MODE_SEQUENCE_LOW_MED_HIGH);
 ```
 
+### Registration and Startup
+
+Once your endpoints are configured, register them with the Zigbee core and start the stack:
+
+```cpp
+Zigbee.addEndpoint(&zbFan);
+Zigbee.addEndpoint(&zbLight);  // If you have multiple endpoints
+
+if (!Zigbee.begin(ZIGBEE_ROUTER)) {
+  ESP.restart();
+}
+
+// Block until the device has joined a network
+while (!Zigbee.connected()) {
+  delay(100);
+}
+```
+
+The order matters: configure endpoints → register with `addEndpoint()` → call `Zigbee.begin()`. Attributes and clusters can't be modified after `begin()`.
+
+**Worked example** - The Skyfan conditionally registers the light endpoint based on the hardware variant, then starts Zigbee and waits for network join ([`skyfan-zigbee.ino:349-363`](src/skyfan-zigbee/skyfan-zigbee.ino)):
+
+```cpp
+Zigbee.addEndpoint(&zbFanControl);
+if (hasLight) {
+  Zigbee.addEndpoint(&zbLight);
+}
+
+if (!Zigbee.begin(ZIGBEE_ROUTER)) {
+  Log::error("Zigbee failed to start - rebooting");
+  ESP.restart();
+}
+
+while (!Zigbee.connected()) {
+  delay(ZIGBEE_CONNECTION_POLL_MS);
+}
+```
+
 ---
 
 ## Handling Commands
