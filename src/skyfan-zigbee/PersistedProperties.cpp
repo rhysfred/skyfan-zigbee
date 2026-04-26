@@ -21,6 +21,7 @@
 
 PersistedProperties::PersistedProperties()
   : _mcuBaudRate(0),
+    _baudNegotiationCycles(0),
     _powerOnLightState(-1),
     _powerOnLightColourTemp(-1),
     _bootIdx(0),
@@ -42,6 +43,12 @@ void PersistedProperties::begin() {
   if (prefs.isKey(KEY_MCU_BAUD)) {
     _mcuBaudRate = prefs.getUInt(KEY_MCU_BAUD, 0);
     Log::debug("Loaded mcuBaudRate from NVS: %lu", _mcuBaudRate);
+  }
+
+  // Load baud negotiation cycles (0 if not set)
+  if (prefs.isKey(KEY_BAUD_CYCLES)) {
+    _baudNegotiationCycles = prefs.getUChar(KEY_BAUD_CYCLES, 0);
+    Log::debug("Loaded baudNegotiationCycles from NVS: %d", _baudNegotiationCycles);
   }
 
   // Load power-on light state (-1 if not set)
@@ -135,6 +142,7 @@ void PersistedProperties::clearAll() {
 
   // Reset in-memory cache
   _mcuBaudRate = 0;
+  _baudNegotiationCycles = 0;
   _powerOnLightState = -1;
   _powerOnLightColourTemp = -1;
   _bootIdx = 0;
@@ -172,6 +180,24 @@ void PersistedProperties::setMcuBaudRate(uint32_t baudRate) {
     Log::error("Failed to write mcuBaudRate to NVS");
   } else {
     Log::debug("Wrote mcuBaudRate to NVS: %lu", baudRate);
+  }
+
+  closeNvs();
+}
+
+// Baud Negotiation Cycles
+uint8_t PersistedProperties::getBaudNegotiationCycles() const {
+  return _baudNegotiationCycles;
+}
+
+void PersistedProperties::setBaudNegotiationCycles(uint8_t cycles) {
+  _baudNegotiationCycles = cycles;
+  if (!openNvsForWriting()) return;
+
+  if (prefs.putUChar(KEY_BAUD_CYCLES, cycles) == 0) {
+    Log::error("Failed to write baudNegotiationCycles to NVS");
+  } else {
+    Log::debug("Wrote baudNegotiationCycles to NVS: %d", cycles);
   }
 
   closeNvs();
@@ -304,6 +330,11 @@ void PersistedProperties::dumpAll() const {
     Log::info("MCU baud rate: %lu", _mcuBaudRate);
   } else {
     Log::info("MCU baud rate: not set");
+  }
+  if (_baudNegotiationCycles > 0) {
+    Log::info("Baud negotiation cycles: %d", _baudNegotiationCycles);
+  } else {
+    Log::info("Baud negotiation cycles: not set");
   }
   Log::info("Product ID: %s", _productId[0] != '\0' ? _productId : "not set");
   if (_productIdMismatch[0] != '\0') {

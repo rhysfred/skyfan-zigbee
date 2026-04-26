@@ -49,6 +49,21 @@ TuyaProtocol tuya(&tuyaSerial);
 PersistedProperties props;
 
 bool hasLight = true;
+bool mcuBreakout = false;
+
+// Breakout check - called during MCU connect/negotiate loops
+// Returns true if 'b' received on debug serial, triggering breakout mode
+bool checkSerialBreakout() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'b' || c == 'B') {
+      Log::info("Breakout command received — skipping MCU communication");
+      mcuBreakout = true;
+      return true;
+    }
+  }
+  return false;
+}
 
 const char* getResetReasonString() {
   switch (esp_reset_reason()) {
@@ -70,6 +85,11 @@ volatile bool otaRunning = false;
 
 /********************* fan control callback functions **************************/
 void setFan(ZigbeeFanMode mode) {
+  if (mcuBreakout) {
+    Log::error("MCU breakout active — rejecting fan mode change, rolling back");
+    zbFanControl.rollbackFanMode();
+    return;
+  }
   Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
              ZIGBEE_FAN_CONTROL_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_FAN_CONTROL, ESP_ZB_ZCL_ATTR_FAN_CONTROL_FAN_MODE_ID, (uint32_t)mode);
   statusLed.flashCommand();
@@ -109,6 +129,11 @@ void setFan(ZigbeeFanMode mode) {
 
 // Fan direction control callback function
 void setFanDirection(uint8_t direction) {
+  if (mcuBreakout) {
+    Log::error("MCU breakout active — rejecting fan direction change, rolling back");
+    zbFanControl.rollbackFanDirection();
+    return;
+  }
   Log::debug("Write Zigbee message 'endpoint: %d, cluster: 0x%04X, attribute: 0x%04X: %lu'",
              ZIGBEE_FAN_CONTROL_ENDPOINT, VENTAIR_CUSTOM_CLUSTER_ID, CUSTOM_ATTR_FAN_DIRECTION, (uint32_t)direction);
   statusLed.flashCommand();
@@ -125,6 +150,12 @@ void setFanDirection(uint8_t direction) {
 static bool lightCallbackInitialized = false;  // Skip first callback from initialization
 
 void setLight(bool on, uint8_t level, uint16_t colourTempMired) {
+  if (mcuBreakout) {
+    Log::error("MCU breakout active — rejecting light change, rolling back");
+    zbLight.rollback();
+    return;
+  }
+
   // Skip the first callback triggered by initialisation
   // (setLightColorTemperature() call in setup triggers this with stale values)
   if (!lightCallbackInitialized) {
@@ -211,21 +242,23 @@ void setup() {
   // Load persisted properties from NVS
   props.begin();
 
-  // Register heartbeat callback before connect() so heartbeats during the DP query loop are captured
+  // Register heartbeat callback before connect() so heartbeats during loops are captured
   tuya.setHeartbeatCallback([](bool isRestart) {
     props.onMcuHeartbeat(isRestart);
   });
 
   // Connect to MCU - use persisted baud rate if available, otherwise negotiate
+  bool mcuConnected = false;
   uint32_t storedRate = props.getMcuBaudRate();
   if (storedRate > 0) {
-    Log::info("Using persisted baud rate: %lu", storedRate);
-    tuya.connect(storedRate);
+    mcuConnected = tuya.connect(storedRate, checkSerialBreakout);
   } else {
-    int32_t result = tuya.connect();
+    uint8_t cycles = 0;
+    int32_t result = tuya.negotiateBaud(checkSerialBreakout, cycles);
     if (result > 0) {
+      mcuConnected = true;
       props.setMcuBaudRate(result);
-      Log::info("Persisted negotiated baud rate: %d", result);
+      props.setBaudNegotiationCycles(cycles);
     }
   }
 
@@ -236,15 +269,11 @@ void setup() {
   }
 #endif
 
-  // Drain any pending MCU status data before Zigbee starts (responses are
-  // discarded — no callback registered yet, avoiding calls into uninitialised
-  // Zigbee stack)
-  delay(50);
-  tuya.sendDatapointQuery();
-  unsigned long queryStart = millis();
-  while (millis() - queryStart < 500) {
-    tuya.processResponse();
-    delay(5);
+  // Query product info from MCU (dedicated step with own timeout)
+  if (mcuConnected && !mcuBreakout) {
+    delay(50);
+    tuya.queryProductInfo();
+    tuya.waitForProductInfo(TUYA_COMMAND_TIMEOUT_MS);
   }
 
   // Resolve product ID: NVS cache takes precedence, MCU value used to populate or detect mismatch
@@ -330,9 +359,6 @@ void setup() {
     ESP.restart();
   }
 
-  // Register status callback now that Zigbee stack is initialised
-  tuya.setDeviceStatusCallback(onDeviceStatus);
-
   Log::info("Connecting to network (hold BOOT 3s to factory reset)");
   while (!Zigbee.connected()) {
     Log::raw(".");
@@ -352,22 +378,25 @@ void setup() {
   Serial.println();
   Log::info("Zigbee connected successfully");
 
-  if (hasLight) {
-    // Initialise colour temperature to set colour mode to TEMPERATURE
-    // This ensures the temp callback is called for on/off and level changes
-    zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
-  }
+  // Post-connect: register status callback, sync state to coordinator
+  if (!mcuBreakout) {
+    tuya.setDeviceStatusCallback(onDeviceStatus);
 
-  // Re-query MCU state now that Zigbee is connected. The initial query during
-  // setup populated confirmed state but reports couldn't reach the coordinator.
-  // This second query lets handleStatusUpdate send reports that actually arrive.
-  tuya.sendDatapointQuery();
-  unsigned long syncStart = millis();
-  while (millis() - syncStart < 500) {
-    tuya.processResponse();
-    delay(5);
+    if (hasLight) {
+      // Initialise colour temperature to set colour mode to TEMPERATURE
+      // This ensures the temp callback is called for on/off and level changes
+      zbLight.setLightColorTemperature(COLOUR_TEMP_WARM_MIRED);
+    }
+
+    // Single DP query now that Zigbee is connected — status reports reach coordinator
+    tuya.sendDatapointQuery();
+    unsigned long syncStart = millis();
+    while (millis() - syncStart < 500) {
+      tuya.processResponse();
+      delay(5);
+    }
+    Log::info("Initial state synced to coordinator");
   }
-  Log::info("Initial state synced to coordinator");
 
   // Start OTA client query - first request is within a minute, then hourly automatically
   zbFanControl.requestOTAUpdate();
@@ -382,6 +411,12 @@ void loop() {
     } else if (c == 'c' || c == 'C') {
       props.clearAll();
       Log::info("All persisted data cleared");
+    } else if (c == 'l' || c == 'L') {
+#ifdef __BOOT_LOG__
+      props.dumpBootLogs();
+#else
+      Log::info("Boot logging not enabled (define __BOOT_LOG__ to enable)");
+#endif
     } else if (c == 'r' || c == 'R') {
       Log::info("Factory reset requested via serial");
       props.clearAll();
@@ -392,8 +427,10 @@ void loop() {
   }
 
   // Update Tuya protocol (handles responses, heartbeat, connection status, and queue processing)
-  tuya.setRadioConnected(Zigbee.connected());
-  tuya.update();
+  if (!mcuBreakout) {
+    tuya.setRadioConnected(Zigbee.connected());
+    tuya.update();
+  }
 
   // Update button state (non-blocking)
   factoryResetButton.update();

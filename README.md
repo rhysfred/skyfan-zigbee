@@ -120,7 +120,7 @@ skyfan-zigbee/
 
 ### Tuya Serial Protocol
 - **Frame Format**: `0x55AA + Version + Command + Length + Data + Checksum`
-- **Baud Rate**: Auto-negotiated (tries 9600 first per Tuya spec, falls back to 115200)
+- **Baud Rate**: Auto-negotiated (cycles 9600/115200 indefinitely until MCU responds; persisted to NVS on success)
 - **Checksum Validation**: All incoming packets validated before processing
 - **Data Points**: Boolean, Value, and Enum types for different controls
 
@@ -331,9 +331,14 @@ Debug output runs at 115200 baud and can be viewed using the Arduino IDE Serial 
 ### Serial Debug Commands
 While connected to the debug serial port, the following single-character commands are available:
 
-- **`r`** / **`R`**: Clear the persisted MCU baud rate from NVS. The baud rate will be re-negotiated on next boot.
-- **`p`** / **`P`**: Display the stored product ID from NVS (parsed from MCU init sequence).
-- **`b`** / **`B`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
+#### During startup (MCU negotiation/reconnect only)
+- **`b`** / **`B`**: Breakout — abort MCU communication and start Zigbee with defaults (fan+light). The device will be reachable for diagnostics and factory reset via Zigbee2MQTT, but all state change commands will be rejected and rolled back. MCU communication is skipped for the remainder of the session.
+
+#### During normal operation
+- **`s`** / **`S`**: Dump all persisted properties from NVS (baud rate, negotiation cycles, product ID, restart counters, etc.)
+- **`l`** / **`L`**: Dump stored boot logs from NVS (most recent first). Only available when `__BOOT_LOG__` is defined.
+- **`c`** / **`C`**: Clear all persisted data from NVS.
+- **`r`** / **`R`**: Factory reset — clears NVS and resets Zigbee network state.
 
 ## License
 

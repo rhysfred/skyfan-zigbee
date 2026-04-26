@@ -196,24 +196,48 @@ HeartbeatResult TuyaProtocol::checkHeartbeat() {
   return result;
 }
 
-int32_t TuyaProtocol::connect(uint32_t baudRate) {
-  if (baudRate > 0) {
-    Log::info("Using persisted baud rate: %lu", baudRate);
-    serial->end();
-    delay(10);
-    serial->begin(baudRate);
-    sendHeartbeat();
-    return baudRate;
-  }
+bool TuyaProtocol::connect(uint32_t baudRate, BreakoutCheck breakoutCheck) {
+  Log::info("Connecting to MCU at %lu baud", baudRate);
+  serial->end();
+  delay(10);
+  serial->begin(baudRate);
 
-  // Negotiate baud rate (try 9600 first, then 115200)
+  while (true) {
+    if (breakoutCheck && breakoutCheck()) {
+      return false;
+    }
+
+    unsigned long startTime = millis();
+    HeartbeatResult hbResult = checkHeartbeat();
+
+    if (hbResult.success) {
+      Log::info("MCU heartbeat received at %lu baud", baudRate);
+      return true;
+    }
+
+    // Wait remainder of 1-second interval
+    unsigned long elapsed = millis() - startTime;
+    if (elapsed < BAUD_NEGOTIATION_INTERVAL_MS) {
+      delay(BAUD_NEGOTIATION_INTERVAL_MS - elapsed);
+    }
+  }
+}
+
+int32_t TuyaProtocol::negotiateBaud(BreakoutCheck breakoutCheck, uint8_t& cyclesUsed) {
   const uint32_t baudRates[] = { BAUD_RATE_PRIMARY, BAUD_RATE_SECONDARY };
   const uint8_t numRates = sizeof(baudRates) / sizeof(baudRates[0]);
 
-  Log::info("Starting baud rate negotiation (max %d cycles)", BAUD_NEGOTIATION_MAX_CYCLES);
+  Log::info("Starting baud rate negotiation (indefinite)");
+  cyclesUsed = 0;
 
-  for (uint8_t cycle = 0; cycle < BAUD_NEGOTIATION_MAX_CYCLES; cycle++) {
+  while (true) {
+    cyclesUsed++;
+
     for (uint8_t rateIdx = 0; rateIdx < numRates; rateIdx++) {
+      if (breakoutCheck && breakoutCheck()) {
+        return -1;
+      }
+
       uint32_t rate = baudRates[rateIdx];
       unsigned long startTime = millis();
 
@@ -221,14 +245,14 @@ int32_t TuyaProtocol::connect(uint32_t baudRate) {
       delay(10);
       serial->begin(rate);
 
-      Log::debug("Trying %lu baud (cycle %d/%d)", rate, cycle + 1, BAUD_NEGOTIATION_MAX_CYCLES);
+      Log::debug("Trying %lu baud (cycle %d)", rate, cyclesUsed);
 
       HeartbeatResult hbResult = checkHeartbeat();
       Log::boot(rate, tuyaBuffer, HEARTBEAT_PACKET_LENGTH,
                 hbResult.rxBytes, hbResult.rxCount, hbResult.success);
 
       if (hbResult.success) {
-        Log::info("Baud rate negotiation successful: %lu baud", rate);
+        Log::info("Baud rate negotiation successful: %lu baud (cycle %d)", rate, cyclesUsed);
         return rate;
       }
 
@@ -239,9 +263,6 @@ int32_t TuyaProtocol::connect(uint32_t baudRate) {
       }
     }
   }
-
-  Log::error("Baud rate negotiation failed after %d cycles", BAUD_NEGOTIATION_MAX_CYCLES);
-  return -1;
 }
 
 void TuyaProtocol::update() {
@@ -316,9 +337,30 @@ void TuyaProtocol::sendNetworkStatus(uint8_t status) {
   sendCommand(TUYA_CMD_NETWORK_STATUS, &status, 1);
 }
 
-void TuyaProtocol::sendProductInfo() {
-  // Send minimal product info response - empty data
+void TuyaProtocol::queryProductInfo() {
+  // Initiate product info query to MCU
   sendCommand(TUYA_CMD_PRODUCT_INFO, nullptr, 0);
+}
+
+void TuyaProtocol::ackProductInfo() {
+  // Acknowledge MCU product info response
+  sendCommand(TUYA_CMD_PRODUCT_INFO, nullptr, 0);
+}
+
+bool TuyaProtocol::waitForProductInfo(unsigned long timeoutMs) {
+  _suppressProductInfoAck = true;
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    processResponse();
+    if (_productId[0] != '\0') {
+      _suppressProductInfoAck = false;
+      return true;
+    }
+    delay(5);
+  }
+  _suppressProductInfoAck = false;
+  Log::debug("Product info response timed out after %lu ms", timeoutMs);
+  return false;
 }
 
 void TuyaProtocol::sendWorkMode() {
@@ -449,7 +491,9 @@ void TuyaProtocol::processResponse() {
         // MCU sent its product info (response to our query, or MCU-initiated)
         parseProductInfo(rxMessage.data, rxMessage.dataLength);
       }
-      sendProductInfo();
+      if (!_suppressProductInfoAck) {
+        ackProductInfo();
+      }
     } else if (rxMessage.command == TUYA_CMD_QUERY_WORK_MODE) {
       sendWorkMode();
     }

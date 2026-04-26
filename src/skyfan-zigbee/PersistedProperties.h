@@ -34,6 +34,7 @@ private:
   static constexpr const char* KEY_BOOT_PREFIX = "boot";  // boot1-boot5
   static constexpr const char* KEY_PRODUCT_ID = "productId";
   static constexpr const char* KEY_PID_MISMATCH = "pidMismatch";
+  static constexpr const char* KEY_BAUD_CYCLES = "baudCycles";
   static constexpr const char* KEY_MCU_RESTARTS = "mcuRestarts";
   static constexpr const char* KEY_ZB_RESTARTS = "zbRestarts";
   static constexpr const char* KEY_LAST_RESET = "lastReset";
@@ -45,6 +46,7 @@ private:
 
   // In-memory cache
   uint32_t _mcuBaudRate;           // 0 = not set
+  uint8_t _baudNegotiationCycles;  // 0 = not set
   int8_t _powerOnLightState;       // -1 = not set, 0 = off, 1 = on
   int8_t _powerOnLightColourTemp;  // -1 = not set, 0-2 = temp value
   uint8_t _bootIdx;                // 0 = uninitialised, 1-5 = last written slot
@@ -66,6 +68,10 @@ public:
   // MCU Baud Rate (returns 0 if not set)
   uint32_t getMcuBaudRate() const;
   void setMcuBaudRate(uint32_t baudRate);
+
+  // Baud negotiation cycles (returns 0 if not set)
+  uint8_t getBaudNegotiationCycles() const;
+  void setBaudNegotiationCycles(uint8_t cycles);
 
   // Power-on Light State (returns -1 if not set, 0=off, 1=on)
   int8_t getPowerOnLightState() const;

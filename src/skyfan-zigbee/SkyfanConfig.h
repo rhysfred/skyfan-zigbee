@@ -91,8 +91,8 @@ inline bool isLightModel(const char* productId) {
 #define BAUD_RATE_PRIMARY              9600     // Try first (per Tuya spec)
 #define BAUD_RATE_SECONDARY            115200   // Try second (also used as fallback)
 #define BAUD_NEGOTIATION_INTERVAL_MS   1000     // 1 second between queries (per Tuya spec)
-#define BAUD_NEGOTIATION_MAX_CYCLES    5        // Max full cycles (each tries both rates)
 // Note: Uses TUYA_COMMAND_TIMEOUT_MS (500ms) for response timeout per Tuya spec
+
 
 
 // === Colour Temperature Configuration ===
